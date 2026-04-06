@@ -6,98 +6,77 @@ import numpy as np
 import json
 from datetime import datetime, timedelta
 from forecast import calculate_forecast, get_daily_burn_rate
+from forecast_store import save_forecast, load_forecast
 from components import metric_row, eac_chart, COLORS
 from config import PROJECT_END
 import plotly.graph_objects as go
-
-
-def _save_forecast_snapshot(all_plans: dict, params: dict) -> str:
-    """Build a JSON snapshot of the current forecast state."""
-    snapshot = {
-        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "saved_by": params.get("saved_by", ""),
-        "note": params.get("note", ""),
-        "hours_per_day": params.get("hours_per_day", 10),
-        "nt_pct": params.get("nt_pct", 75),
-        "forecast_days": params.get("forecast_days", 14),
-        "plans": all_plans,
-    }
-    return json.dumps(snapshot, indent=2, default=str)
-
-
-def _load_forecast_snapshot(json_str: str) -> dict:
-    """Parse a saved forecast snapshot."""
-    return json.loads(json_str)
 
 
 def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     st.header("Forecast")
 
     # =====================================================================
-    # SAVE / LOAD bar
+    # AUTO-LOAD saved forecast on first run
     # =====================================================================
-    with st.expander("Save / Load Forecast", expanded=False):
-        save_col, load_col = st.columns(2)
+    if "forecast_loaded" not in st.session_state:
+        saved = load_forecast()
+        if saved and "plans" in saved:
+            for key, val in saved["plans"].items():
+                st.session_state[key] = val
+            st.session_state["forecast_loaded"] = True
+            st.session_state["forecast_meta"] = {
+                "saved_by": saved.get("saved_by", ""),
+                "saved_at": saved.get("saved_at", ""),
+                "note": saved.get("note", ""),
+            }
+        else:
+            st.session_state["forecast_loaded"] = True
 
-        with save_col:
-            st.markdown("**Save Current Forecast**")
-            save_name = st.text_input("Your name", key="fc_save_name",
-                                       placeholder="e.g. Dany")
-            save_note = st.text_input("Note (optional)", key="fc_save_note",
-                                       placeholder="e.g. Updated PMI demob plan")
+    # =====================================================================
+    # SAVE bar
+    # =====================================================================
+    meta = st.session_state.get("forecast_meta", {})
+    if meta.get("saved_by"):
+        st.caption(
+            f"Last saved by **{meta['saved_by']}** on {meta['saved_at']}"
+            + (f" — _{meta['note']}_" if meta.get("note") else "")
+        )
 
-            if st.button("Prepare Download", key="fc_save_btn", use_container_width=True):
-                # Collect all plans from session state
-                all_plans = {}
-                for key, val in st.session_state.items():
-                    if key.startswith("daily_plan_v2_"):
-                        all_plans[key] = val
-
-                if not all_plans:
-                    st.warning("No forecast data to save. Edit the planner first.")
-                else:
-                    snapshot_json = _save_forecast_snapshot(all_plans, {
-                        "saved_by": save_name,
-                        "note": save_note,
+    save_col1, save_col2, save_col3 = st.columns([1, 2, 1])
+    with save_col1:
+        save_name = st.text_input("Your name", key="fc_save_name", placeholder="e.g. Dany")
+    with save_col2:
+        save_note = st.text_input("Note (optional)", key="fc_save_note",
+                                   placeholder="e.g. Updated PMI demob plan")
+    with save_col3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Save Forecast", type="primary", use_container_width=True, key="fc_save_btn"):
+            all_plans = {k: v for k, v in st.session_state.items()
+                         if k.startswith("daily_plan_v2_")}
+            if not all_plans:
+                st.warning("No forecast data to save. Edit the planner below first.")
+            elif not save_name:
+                st.warning("Enter your name before saving.")
+            else:
+                success = save_forecast(
+                    plans=all_plans,
+                    saved_by=save_name,
+                    note=save_note,
+                    params={
                         "hours_per_day": st.session_state.get("fc_hrs_per_day", 10),
                         "nt_pct": st.session_state.get("fc_nt_pct", 75),
                         "forecast_days": st.session_state.get("fc_days", 14),
-                    })
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-                    st.download_button(
-                        f"Download forecast_{timestamp}.json",
-                        snapshot_json,
-                        file_name=f"forecast_{timestamp}.json",
-                        mime="application/json",
-                        use_container_width=True,
-                    )
+                    },
+                )
+                if success:
+                    st.success(f"Forecast saved by {save_name}")
+                    st.session_state["forecast_meta"] = {
+                        "saved_by": save_name,
+                        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "note": save_note,
+                    }
 
-        with load_col:
-            st.markdown("**Load Saved Forecast**")
-            uploaded = st.file_uploader(
-                "Upload a saved forecast .json file",
-                type=["json"], key="fc_load_file",
-            )
-            if uploaded is not None:
-                try:
-                    snapshot = _load_forecast_snapshot(uploaded.read().decode("utf-8"))
-                    # Restore plans to session state
-                    for key, val in snapshot.get("plans", {}).items():
-                        st.session_state[key] = val
-
-                    st.success(
-                        f"Loaded forecast saved by **{snapshot.get('saved_by', '?')}** "
-                        f"on {snapshot.get('saved_at', '?')}"
-                    )
-                    if snapshot.get("note"):
-                        st.caption(f"Note: {snapshot['note']}")
-                except Exception as e:
-                    st.error(f"Failed to load forecast: {e}")
-
-        # Show last saved info if available
-        all_plans = {k: v for k, v in st.session_state.items() if k.startswith("daily_plan_v2_")}
-        if all_plans:
-            st.caption(f"Current forecast has {len(all_plans)} contractor plan(s) in memory.")
+    st.divider()
 
     # =====================================================================
     # SECTION 1: Daily Forecast Planner

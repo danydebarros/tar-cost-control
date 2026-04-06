@@ -5,3 +5,4 @@ credentials/
 *.xlsx
 *.xls
 .DS_Store
+.streamlit/secrets.toml
