@@ -8,14 +8,16 @@ Run with: streamlit run app.py
 import streamlit as st
 import pandas as pd
 import os
+import re
 from datetime import datetime
 
 from data_loader import (
-    load_from_excel, load_gate_from_google_sheet,
+    load_from_excel, load_daily_gate_files, load_gate_from_google_sheet,
     get_embedded_rate_table, clean_gate_data, build_rate_lookup,
 )
 from processing import run_pipeline
 from forecast import calculate_forecast
+from config import DAILY_FILES_FOLDER
 from views import (
     executive_summary,
     daily_hours,
@@ -24,6 +26,7 @@ from views import (
     forecast_view,
     allocation_gaps,
     timesheet_view,
+    hours_drilldown,
 )
 
 
@@ -37,9 +40,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ---------------------------------------------------------------------------
-# Custom CSS
-# ---------------------------------------------------------------------------
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem; padding-bottom: 1rem; }
@@ -55,14 +55,9 @@ st.markdown("""
     #MainMenu { visibility: hidden; }
     footer { visibility: hidden; }
     .status-ok { color: #0D904F; font-weight: 600; font-size: 0.85rem; }
-    .status-err { color: #C5221F; font-weight: 600; font-size: 0.85rem; }
 </style>
 """, unsafe_allow_html=True)
 
-
-# ---------------------------------------------------------------------------
-# Header
-# ---------------------------------------------------------------------------
 st.markdown("""
 <div class="app-header">
     <h1>TAR Cost Control</h1>
@@ -77,8 +72,11 @@ st.markdown("""
 with st.sidebar:
     st.markdown("### Data Source")
 
-    # Check for default local file
-    default_path = None
+    # Check for default folders/files
+    default_folder = os.path.expanduser(DAILY_FILES_FOLDER)
+    has_daily_folder = os.path.isdir(default_folder)
+
+    default_file = None
     for fname in [
         "TAR2026 - Nederland TAR Costing Tracking (1).xlsx",
         "TAR2026 - Nederland TAR Costing Tracking.xlsx",
@@ -86,39 +84,45 @@ with st.sidebar:
     ]:
         p = os.path.expanduser(f"~/Downloads/{fname}")
         if os.path.exists(p):
-            default_path = p
+            default_file = p
             break
-    use_default = default_path is not None
+    has_default_file = default_file is not None
 
-    source_options = ["Google Sheet (Live)"]
-    if use_default:
-        source_options.append("Local File (Downloads)")
+    source_options = []
+    if has_daily_folder:
+        source_options.append("Daily Gate Files (Folder)")
+    source_options.append("Google Sheet (Live)")
+    if has_default_file:
+        source_options.append("Local Excel File")
     source_options.append("Upload Excel File")
 
     data_source = st.radio("Load data from:", source_options, key="data_source")
+
+    # Folder path input for daily files
+    folder_path = None
+    if data_source == "Daily Gate Files (Folder)":
+        folder_path = st.text_input(
+            "Folder path",
+            value=default_folder if has_daily_folder else "",
+            help="Path to folder containing daily .xls/.xlsm gate files",
+            key="gate_folder",
+        )
 
     # Google Sheet config
     sheet_id_input = None
     gid = "0"
     if data_source == "Google Sheet (Live)":
-        st.caption(
-            "Paste Gate Time Data into your own Google Sheet, "
-            "set sharing to 'Anyone with the link', then paste the URL or Sheet ID below."
-        )
+        st.caption("Paste Gate Time Data into your own public Google Sheet.")
         raw_input = st.text_input(
             "Google Sheet URL or ID",
             value=st.session_state.get("gate_sheet_id", ""),
-            placeholder="Paste full URL or just the Sheet ID",
+            placeholder="Paste full URL or Sheet ID",
             key="gate_sheet_id_input",
         )
-        # Extract Sheet ID from URL if full URL was pasted
         if raw_input:
             if "/d/" in raw_input:
-                # Extract ID from URL like docs.google.com/spreadsheets/d/ID/edit...
-                import re
                 match = re.search(r"/d/([a-zA-Z0-9_-]+)", raw_input)
                 sheet_id_input = match.group(1) if match else raw_input
-                # Extract gid if present
                 gid_match = re.search(r"gid=(\d+)", raw_input)
                 if gid_match:
                     gid = gid_match.group(1)
@@ -145,8 +149,9 @@ with st.sidebar:
     st.markdown("### Navigation")
     page = st.radio(
         "View",
-        ["Executive Summary", "Daily Hours", "Contractor View",
-         "Trade View", "Timesheets / Invoices", "Forecast", "Data Audit"],
+        ["Executive Summary", "Hours Drill-Down", "Daily Hours",
+         "Contractor View", "Trade View", "Timesheets / Invoices",
+         "Forecast", "Data Audit"],
         key="nav_page",
     )
 
@@ -158,9 +163,24 @@ with st.sidebar:
 # Data loading
 # ---------------------------------------------------------------------------
 
+@st.cache_data(show_spinner=False, ttl=300)
+def load_and_process_daily_folder(folder: str):
+    """Load from folder of daily gate files + embedded rates."""
+    gate_raw = load_daily_gate_files(folder)
+    if gate_raw.empty:
+        return None
+    rate_table = get_embedded_rate_table()
+    gate_clean = clean_gate_data(gate_raw)
+    rate_lookup = build_rate_lookup(rate_table)
+    result = run_pipeline(gate_clean, rate_lookup)
+    result["rate_lookup"] = rate_lookup
+    result["gate_clean"] = gate_clean
+    result["gate_raw"] = gate_raw
+    return result
+
+
 @st.cache_data(show_spinner="Loading from Google Sheet...", ttl=300)
 def load_and_process_gsheet(sheet_id: str, gid: str):
-    """Load gate data from public Google Sheet + embedded rates, then process."""
     gate_raw = load_gate_from_google_sheet(sheet_id, gid)
     if gate_raw.empty:
         return None
@@ -176,7 +196,6 @@ def load_and_process_gsheet(sheet_id: str, gid: str):
 
 @st.cache_data(show_spinner="Loading from file...")
 def load_and_process_file(file_path_or_bytes, source_type: str):
-    """Load from Excel file, then process."""
     raw = load_from_excel(file_path_or_bytes)
     if not raw:
         return None
@@ -192,40 +211,34 @@ def load_and_process_file(file_path_or_bytes, source_type: str):
 # Route to the right loader
 processed = None
 
-if data_source == "Google Sheet (Live)":
+if data_source == "Daily Gate Files (Folder)":
+    if not folder_path:
+        st.info("Enter the path to the folder containing daily gate files.")
+        st.stop()
+    processed = load_and_process_daily_folder(folder_path)
+
+elif data_source == "Google Sheet (Live)":
     if not sheet_id_input:
         st.info(
-            "**How to set up live Google Sheet access:**\n\n"
-            "1. Create a new Google Sheet on **your** Drive\n"
-            "2. Copy the **Gate Time Data** tab from the client sheet and paste it "
-            "into your new sheet (keep the same column headers)\n"
-            "3. Set sharing: **Share > Anyone with the link > Viewer**\n"
-            "4. Copy the Sheet ID from the URL and paste it in the sidebar\n\n"
-            "The Sheet ID is the long string between `/d/` and `/edit` in the URL.\n\n"
-            "Rates and estimates are already embedded in the app — "
-            "you only need to refresh the gate data."
+            "**Setup:**\n\n"
+            "1. Create a Google Sheet on your Drive (or use your 'Nederland Gate Times' folder)\n"
+            "2. Paste the Gate Time Data with headers\n"
+            "3. Share as 'Anyone with the link > Viewer'\n"
+            "4. Paste the URL in the sidebar"
         )
         st.stop()
     processed = load_and_process_gsheet(sheet_id_input, gid)
     if processed:
-        st.sidebar.markdown(
-            '<p class="status-ok">Connected to Google Sheet</p>',
-            unsafe_allow_html=True,
-        )
+        st.sidebar.markdown('<p class="status-ok">Connected</p>', unsafe_allow_html=True)
 
-elif data_source == "Local File (Downloads)" and use_default:
-    processed = load_and_process_file(default_path, "local")
+elif data_source == "Local Excel File" and has_default_file:
+    processed = load_and_process_file(default_file, "local")
 
 elif data_source == "Upload Excel File":
     if uploaded_file is None:
-        st.info(
-            "Upload the TAR Cost Tracker Excel file.\n\n"
-            "The file needs a **Gate Time Data** tab. "
-            "Rates are already embedded in the app."
-        )
+        st.info("Upload the TAR Cost Tracker Excel file.")
         st.stop()
     processed = load_and_process_file(uploaded_file, "upload")
-
 
 if processed is None:
     st.error("Failed to load data. Check the data source and try again.")
@@ -249,18 +262,21 @@ forecast_df = st.session_state.get("forecast_df", None)
 # Sidebar summary
 st.sidebar.divider()
 st.sidebar.markdown("### Data Summary")
-st.sidebar.caption(f"{len(cost_df):,} gate records")
+st.sidebar.caption(f"{len(cost_df):,} records")
 st.sidebar.caption(f"{cost_df['person_id'].nunique()} people")
 st.sidebar.caption(f"{cost_df['total_hours'].sum():,.0f} total hours")
 st.sidebar.caption(f"${cost_df['total_cost'].sum():,.0f} total cost")
-st.sidebar.caption(f"{cost_df['contractor'].nunique()} contractors")
+st.sidebar.caption(
+    f"{cost_df['date'].min().strftime('%b %d')} — {cost_df['date'].max().strftime('%b %d')}"
+)
 
 # ---------------------------------------------------------------------------
 # Route to view
 # ---------------------------------------------------------------------------
-
 if page == "Executive Summary":
     executive_summary.render(cost_df, comparison, forecast_df)
+elif page == "Hours Drill-Down":
+    hours_drilldown.render(cost_df, comparison)
 elif page == "Daily Hours":
     daily_hours.render(cost_df)
 elif page == "Contractor View":

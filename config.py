@@ -14,11 +14,18 @@ GOOGLE_SHEET_ID = "1iJmrfFlFX9_FNlrZlMLi1ZofHQPZ1x7OMdTwTX-Q_78"
 CONTRACTOR_NAME_MAP = {
     "Axis(FOX)": "Axis",
     "Claymar": "Claymar",
+    "Claymar-Nights": "Claymar",
     "Custofab": "Custofab",
     "Spartan Speciality": "Spartan",
     "PMI": "PMI",
     "PK Safety": "PK Safety",
 }
+
+# Default folder for daily gate files
+DAILY_FILES_FOLDER = "~/Downloads/drive-download-20260406T193108Z-3-001"
+
+# Lunch deduction (hours) applied to elapsed time
+LUNCH_DEDUCTION_HOURS = 0.5
 
 IN_SCOPE_CONTRACTORS = list(CONTRACTOR_NAME_MAP.values())
 
