@@ -24,21 +24,19 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
 
     # Key dates
     last_actual = cost_df["date"].max().date()
-    today = datetime.now().date()
-    forecast_start = today  # start from today
-    default_end = today + timedelta(days=13)  # 14 days including today
+    forecast_start = last_actual + timedelta(days=1)  # day after last actual
 
     col_a, col_b, col_c, col_d = st.columns(4)
     with col_a:
         st.metric("Last Actual", last_actual.strftime("%b %d"))
     with col_b:
-        st.metric("Forecast From", today.strftime("%b %d"))
+        st.metric("Forecast From", forecast_start.strftime("%b %d"))
     with col_c:
         forecast_days = st.number_input(
             "Forecast days", min_value=7, max_value=60, value=14, key="fc_days"
         )
     with col_d:
-        forecast_end = today + timedelta(days=forecast_days - 1)
+        forecast_end = forecast_start + timedelta(days=forecast_days - 1)
         st.metric("Forecast To", forecast_end.strftime("%b %d"))
 
     # Contractor selector

@@ -15,6 +15,13 @@ import streamlit as st
 DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/{folder_id}"
 DRIVE_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id={file_id}"
 
+# Browser-like headers to avoid bot detection on cloud servers
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
 
 def list_drive_files(folder_id: str) -> list[dict]:
     """List files in a public Google Drive folder by parsing the folder page.
@@ -23,7 +30,7 @@ def list_drive_files(folder_id: str) -> list[dict]:
     """
     url = DRIVE_FOLDER_URL.format(folder_id=folder_id)
     try:
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(url, headers=_HEADERS, timeout=20)
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
         st.error(f"Cannot access Drive folder: {e}")
@@ -48,7 +55,7 @@ def list_drive_files(folder_id: str) -> list[dict]:
         try:
             r = requests.head(
                 DRIVE_DOWNLOAD_URL.format(file_id=fid),
-                allow_redirects=True, timeout=10,
+                headers=_HEADERS, allow_redirects=True, timeout=10,
             )
             disp = r.headers.get("content-disposition", "")
             ct = r.headers.get("content-type", "")
@@ -106,7 +113,7 @@ def download_drive_files(folder_id: str, local_dir: str = None) -> str:
         try:
             resp = requests.get(
                 DRIVE_DOWNLOAD_URL.format(file_id=f["id"]),
-                timeout=30,
+                headers=_HEADERS, timeout=30,
             )
             if resp.status_code == 200 and len(resp.content) > 100:
                 local_path = os.path.join(local_dir, f["name"])
@@ -129,7 +136,7 @@ def _bulk_list_drive_files(folder_id: str) -> list[dict]:
     """Fallback: extract IDs from folder page and probe each one."""
     url = DRIVE_FOLDER_URL.format(folder_id=folder_id)
     try:
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(url, headers=_HEADERS, timeout=20)
     except requests.exceptions.RequestException:
         return []
 
@@ -141,7 +148,7 @@ def _bulk_list_drive_files(folder_id: str) -> list[dict]:
         try:
             r = requests.get(
                 DRIVE_DOWNLOAD_URL.format(file_id=fid),
-                timeout=15, stream=True,
+                headers=_HEADERS, timeout=15, stream=True,
             )
             disp = r.headers.get("content-disposition", "")
             name_match = re.search(r'filename="([^"]+)"', disp)
