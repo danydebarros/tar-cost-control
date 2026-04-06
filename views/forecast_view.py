@@ -149,50 +149,25 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
             key="fc_nt_pct",
         )
 
-    # Build or load the daily plan
+    # Build the daily plan
     plan_key = f"daily_plan_v2_{fc_contractor}_{forecast_days}"
-    editor_key = f"fc_plan_editor_v2_{fc_contractor}_{forecast_days}"
     date_labels = [d.strftime("%a %m/%d") for d in forecast_dates]
 
+    # Initialize plan for this contractor if not exists
     if plan_key not in st.session_state:
         plan_data = {}
         for trade in trades:
-            default_hc = yesterday_hc.get(trade, 0)
-            plan_data[trade] = [default_hc] * len(forecast_dates)
+            plan_data[trade] = [yesterday_hc.get(trade, 0)] * len(forecast_dates)
         st.session_state[plan_key] = plan_data
 
-    # Ensure all trades present and correct length
+    # Ensure all trades present
     for trade in trades:
         if trade not in st.session_state[plan_key]:
             st.session_state[plan_key][trade] = [yesterday_hc.get(trade, 0)] * len(forecast_dates)
         elif len(st.session_state[plan_key][trade]) != len(forecast_dates):
             st.session_state[plan_key][trade] = [yesterday_hc.get(trade, 0)] * len(forecast_dates)
 
-    # If the editor already has state from a previous edit, use that as source of truth
-    if editor_key in st.session_state:
-        editor_state = st.session_state[editor_key]
-        if "edited_rows" in editor_state:
-            plan_data = st.session_state[plan_key]
-            trade_list = sorted(plan_data.keys())
-            for row_str, changes in editor_state["edited_rows"].items():
-                row_idx = int(row_str)
-                if row_idx < len(trade_list):
-                    trade_name = trade_list[row_idx]
-                    for col_key, val in changes.items():
-                        # col_key can be a column name ("Mon 04/06") or index
-                        try:
-                            col_idx = int(col_key)
-                        except ValueError:
-                            # It's a column name — find its position
-                            try:
-                                col_idx = date_labels.index(col_key)
-                            except ValueError:
-                                continue
-                        if col_idx < len(plan_data[trade_name]):
-                            plan_data[trade_name][col_idx] = val
-            st.session_state[plan_key] = plan_data
-
-    # Build DataFrame from current plan state
+    # Build DataFrame
     plan_df = pd.DataFrame(
         st.session_state[plan_key],
         index=date_labels,
@@ -207,8 +182,13 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     edited_plan = st.data_editor(
         plan_df,
         use_container_width=True,
-        key=editor_key,
     )
+
+    # Persist edits back to session state from the returned DataFrame
+    if edited_plan is not None:
+        for trade in edited_plan.index:
+            vals = pd.to_numeric(edited_plan.loc[trade], errors="coerce").fillna(0)
+            st.session_state[plan_key][trade] = [int(v) for v in vals.values]
 
     # Calculate forecast
     if edited_plan is not None:
