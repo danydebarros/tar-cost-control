@@ -172,15 +172,22 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     if editor_key in st.session_state:
         editor_state = st.session_state[editor_key]
         if "edited_rows" in editor_state:
-            # Apply edits from the editor state back to our plan data
             plan_data = st.session_state[plan_key]
             trade_list = sorted(plan_data.keys())
             for row_str, changes in editor_state["edited_rows"].items():
                 row_idx = int(row_str)
                 if row_idx < len(trade_list):
                     trade_name = trade_list[row_idx]
-                    for col_str, val in changes.items():
-                        col_idx = int(col_str)
+                    for col_key, val in changes.items():
+                        # col_key can be a column name ("Mon 04/06") or index
+                        try:
+                            col_idx = int(col_key)
+                        except ValueError:
+                            # It's a column name — find its position
+                            try:
+                                col_idx = date_labels.index(col_key)
+                            except ValueError:
+                                continue
                         if col_idx < len(plan_data[trade_name]):
                             plan_data[trade_name][col_idx] = val
             st.session_state[plan_key] = plan_data
