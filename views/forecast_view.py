@@ -18,38 +18,41 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     # =====================================================================
     st.subheader("Daily Forecast Planner")
     st.caption(
-        "Enter planned headcount per contractor/trade per day. "
-        "The app calculates forecast hours (headcount x hours/day) and cost using actual rates."
+        "Adjust headcount per trade per day starting from today. "
+        "Pre-filled with yesterday's actual headcount. Forecast window: 14 days."
     )
 
-    # Determine remaining date range
+    # Key dates
     last_actual = cost_df["date"].max().date()
-    project_end = pd.to_datetime(PROJECT_END).date()
-    forecast_start = last_actual + timedelta(days=1)
+    today = datetime.now().date()
+    forecast_start = today  # start from today
+    default_end = today + timedelta(days=13)  # 14 days including today
 
-    col_a, col_b, col_c = st.columns(3)
+    col_a, col_b, col_c, col_d = st.columns(4)
     with col_a:
-        st.metric("Last Actual Date", last_actual.strftime("%b %d, %Y"))
+        st.metric("Last Actual", last_actual.strftime("%b %d"))
     with col_b:
-        st.metric("Project End", project_end.strftime("%b %d, %Y"))
+        st.metric("Forecast From", today.strftime("%b %d"))
     with col_c:
-        remaining_days = (project_end - last_actual).days
-        st.metric("Remaining Days", f"{remaining_days}")
+        forecast_days = st.number_input(
+            "Forecast days", min_value=7, max_value=60, value=14, key="fc_days"
+        )
+    with col_d:
+        forecast_end = today + timedelta(days=forecast_days - 1)
+        st.metric("Forecast To", forecast_end.strftime("%b %d"))
 
-    # Build the daily planner
+    # Contractor selector
     fc_contractor = st.selectbox(
         "Contractor", sorted(cost_df["contractor"].unique()), key="fc_plan_contractor"
     )
 
-    # Get trades for this contractor from comparison (includes zero-hour estimate rows)
+    # Get trades and rates for this contractor
     contractor_comp = comparison[comparison["contractor"] == fc_contractor].copy()
     trades = sorted(contractor_comp["mapped_trade"].unique())
 
-    # Get the rate for each trade
     trade_rates = {}
     for _, row in contractor_comp.iterrows():
         t = row["mapped_trade"]
-        # Use blended rate from actuals if available, else from estimate
         if row["actual_total_hours"] > 0:
             blended = row["actual_total_cost"] / row["actual_total_hours"]
         elif row["est_hours"] > 0:
@@ -58,47 +61,24 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
             blended = 0
         trade_rates[t] = round(blended, 2)
 
-    # Generate date range for forecast
-    forecast_dates = pd.date_range(start=forecast_start, end=project_end, freq="D")
+    # Get yesterday's actual headcount per trade (to use as default)
+    yesterday = last_actual  # use last actual date as "yesterday"
+    yesterday_data = cost_df[
+        (cost_df["contractor"] == fc_contractor) & (cost_df["date"].dt.date == yesterday)
+    ]
+    yesterday_hc = yesterday_data.groupby("mapped_trade")["person_id"].nunique().to_dict()
 
-    if len(forecast_dates) == 0:
-        st.info("Project end date has been reached. No remaining days to forecast.")
-    else:
-        # Initialize or load the daily plan from session state
-        plan_key = f"daily_plan_{fc_contractor}"
-        if plan_key not in st.session_state:
-            # Default: 0 headcount for all trades/dates
-            plan_data = {}
-            for trade in trades:
-                plan_data[trade] = [0] * len(forecast_dates)
-            st.session_state[plan_key] = plan_data
+    # Generate forecast dates
+    forecast_dates = pd.date_range(start=forecast_start, periods=forecast_days, freq="D")
 
-        # Ensure all trades are present (in case comparison changed)
-        for trade in trades:
-            if trade not in st.session_state[plan_key]:
-                st.session_state[plan_key][trade] = [0] * len(forecast_dates)
-
-        # Build editable DataFrame: trades as rows, dates as columns
-        plan_df = pd.DataFrame(
-            st.session_state[plan_key],
-            index=forecast_dates,
-        ).T  # trades as rows, dates as columns
-
-        plan_df.columns = [d.strftime("%a %m/%d") for d in forecast_dates]
-        plan_df.index.name = "Trade"
-
-        # Show compact date range if too many columns
-        if len(forecast_dates) > 14:
-            st.caption(
-                f"Showing {len(forecast_dates)} days. "
-                "Enter headcount per trade per day. Scroll right for more dates."
-            )
-
+    # Settings
+    col1, col2 = st.columns(2)
+    with col1:
         hours_per_day = st.number_input(
             "Hours per person per day", min_value=4.0, max_value=16.0,
             value=10.0, step=0.5, key="fc_hrs_per_day",
         )
-
+    with col2:
         nt_ot_split = st.slider(
             "Expected NT/OT split (% NT)",
             min_value=50, max_value=100, value=75, step=5,
@@ -106,95 +86,125 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
             key="fc_nt_pct",
         )
 
-        edited_plan = st.data_editor(
-            plan_df,
-            use_container_width=True,
-            key=f"fc_plan_editor_{fc_contractor}",
+    # Build or load the daily plan
+    plan_key = f"daily_plan_v2_{fc_contractor}_{forecast_days}"
+    if plan_key not in st.session_state:
+        # Pre-fill with yesterday's headcount for every day
+        plan_data = {}
+        for trade in trades:
+            default_hc = yesterday_hc.get(trade, 0)
+            plan_data[trade] = [default_hc] * len(forecast_dates)
+        st.session_state[plan_key] = plan_data
+
+    # Ensure all trades present
+    for trade in trades:
+        if trade not in st.session_state[plan_key]:
+            default_hc = yesterday_hc.get(trade, 0)
+            st.session_state[plan_key][trade] = [default_hc] * len(forecast_dates)
+        elif len(st.session_state[plan_key][trade]) != len(forecast_dates):
+            default_hc = yesterday_hc.get(trade, 0)
+            st.session_state[plan_key][trade] = [default_hc] * len(forecast_dates)
+
+    # Build editable DataFrame
+    plan_df = pd.DataFrame(
+        st.session_state[plan_key],
+        index=forecast_dates,
+    ).T
+    plan_df.columns = [d.strftime("%a %m/%d") for d in forecast_dates]
+    plan_df.index.name = "Trade"
+
+    st.caption(
+        f"Pre-filled with {yesterday.strftime('%b %d')} actual headcount. "
+        f"Edit any cell to adjust. Set to 0 to remove a trade from a day."
+    )
+
+    edited_plan = st.data_editor(
+        plan_df,
+        use_container_width=True,
+        key=f"fc_plan_editor_v2_{fc_contractor}_{forecast_days}",
+    )
+
+    # Save back
+    if edited_plan is not None:
+        st.session_state[plan_key] = {
+            trade: list(edited_plan.loc[trade].values)
+            for trade in edited_plan.index
+        }
+
+    # Calculate forecast
+    if edited_plan is not None:
+        plan_summary = []
+        for trade in edited_plan.index:
+            hc_days = edited_plan.loc[trade].sum()
+            forecast_hrs = hc_days * hours_per_day
+            nt_pct = nt_ot_split / 100
+            fc_nt = forecast_hrs * nt_pct
+            fc_ot = forecast_hrs * (1 - nt_pct)
+            rate = trade_rates.get(trade, 0)
+            fc_cost = forecast_hrs * rate
+
+            comp_row = contractor_comp[contractor_comp["mapped_trade"] == trade]
+            act_hrs = comp_row["actual_total_hours"].sum() if len(comp_row) > 0 else 0
+            act_cost = comp_row["actual_total_cost"].sum() if len(comp_row) > 0 else 0
+            est_hrs = comp_row["est_hours"].sum() if len(comp_row) > 0 else 0
+            est_cost = comp_row["est_cost"].sum() if len(comp_row) > 0 else 0
+
+            plan_summary.append({
+                "Trade": trade,
+                "Yesterday HC": yesterday_hc.get(trade, 0),
+                "HC Days": hc_days,
+                "Forecast Hrs": forecast_hrs,
+                "FC NT": fc_nt,
+                "FC OT": fc_ot,
+                "Blended Rate": rate,
+                "Forecast Cost": fc_cost,
+                "Actual Hrs": act_hrs,
+                "Actual Cost": act_cost,
+                "EAC Hrs": act_hrs + forecast_hrs,
+                "EAC Cost": act_cost + fc_cost,
+                "Est Hrs": est_hrs,
+                "Est Cost": est_cost,
+                "Var Hrs": est_hrs - (act_hrs + forecast_hrs),
+                "Var Cost": est_cost - (act_cost + fc_cost),
+            })
+
+        plan_result = pd.DataFrame(plan_summary)
+
+        st.markdown(f"**{fc_contractor} — Forecast from Daily Plan**")
+
+        tot = plan_result.select_dtypes(include=[np.number]).sum()
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Forecast Hours", f"{tot['Forecast Hrs']:,.0f}")
+        m2.metric("Forecast Cost", f"${tot['Forecast Cost']:,.0f}")
+        m3.metric("EAC Cost", f"${tot['EAC Cost']:,.0f}")
+        var = tot["Est Cost"] - tot["EAC Cost"]
+        m4.metric("Variance to Est", f"${var:+,.0f}",
+                  delta="Under" if var >= 0 else "OVER",
+                  delta_color="normal" if var >= 0 else "inverse")
+
+        st.dataframe(
+            plan_result.style.format({
+                "Yesterday HC": "{:,.0f}",
+                "HC Days": "{:,.0f}",
+                "Forecast Hrs": "{:,.0f}",
+                "FC NT": "{:,.0f}",
+                "FC OT": "{:,.0f}",
+                "Blended Rate": "${:,.2f}",
+                "Forecast Cost": "${:,.0f}",
+                "Actual Hrs": "{:,.0f}",
+                "Actual Cost": "${:,.0f}",
+                "EAC Hrs": "{:,.0f}",
+                "EAC Cost": "${:,.0f}",
+                "Est Hrs": "{:,.0f}",
+                "Est Cost": "${:,.0f}",
+                "Var Hrs": "{:+,.0f}",
+                "Var Cost": "${:+,.0f}",
+            }).map(
+                lambda v: "color: #C5221F; font-weight: bold" if isinstance(v, (int, float)) and v < 0 else "",
+                subset=["Var Hrs", "Var Cost"],
+            ),
+            use_container_width=True, hide_index=True,
         )
-
-        # Save back to session state
-        if edited_plan is not None:
-            st.session_state[plan_key] = {
-                trade: list(edited_plan.loc[trade].values)
-                for trade in edited_plan.index
-            }
-
-        # Calculate forecast from the daily plan
-        if edited_plan is not None:
-            plan_totals = edited_plan.sum(axis=1)  # total headcount-days per trade
-            plan_summary = []
-            for trade in edited_plan.index:
-                hc_days = edited_plan.loc[trade].sum()
-                forecast_hrs = hc_days * hours_per_day
-                nt_pct = nt_ot_split / 100
-                fc_nt = forecast_hrs * nt_pct
-                fc_ot = forecast_hrs * (1 - nt_pct)
-                rate = trade_rates.get(trade, 0)
-                fc_cost = forecast_hrs * rate
-
-                # Get actuals from comparison
-                comp_row = contractor_comp[contractor_comp["mapped_trade"] == trade]
-                act_hrs = comp_row["actual_total_hours"].sum() if len(comp_row) > 0 else 0
-                act_cost = comp_row["actual_total_cost"].sum() if len(comp_row) > 0 else 0
-                est_hrs = comp_row["est_hours"].sum() if len(comp_row) > 0 else 0
-                est_cost = comp_row["est_cost"].sum() if len(comp_row) > 0 else 0
-
-                plan_summary.append({
-                    "Trade": trade,
-                    "HC Days": hc_days,
-                    "Forecast Hrs": forecast_hrs,
-                    "FC NT": fc_nt,
-                    "FC OT": fc_ot,
-                    "Blended Rate": rate,
-                    "Forecast Cost": fc_cost,
-                    "Actual Hrs": act_hrs,
-                    "Actual Cost": act_cost,
-                    "EAC Hrs": act_hrs + forecast_hrs,
-                    "EAC Cost": act_cost + fc_cost,
-                    "Est Hrs": est_hrs,
-                    "Est Cost": est_cost,
-                    "Var Hrs": est_hrs - (act_hrs + forecast_hrs),
-                    "Var Cost": est_cost - (act_cost + fc_cost),
-                })
-
-            plan_result = pd.DataFrame(plan_summary)
-
-            if plan_result["Forecast Hrs"].sum() > 0:
-                st.markdown(f"**{fc_contractor} — Forecast from Daily Plan**")
-
-                # Totals
-                tot = plan_result.select_dtypes(include=[np.number]).sum()
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Forecast Hours", f"{tot['Forecast Hrs']:,.0f}")
-                m2.metric("Forecast Cost", f"${tot['Forecast Cost']:,.0f}")
-                m3.metric("EAC Cost", f"${tot['EAC Cost']:,.0f}")
-                var = tot["Est Cost"] - tot["EAC Cost"]
-                m4.metric("Variance to Est", f"${var:+,.0f}",
-                          delta="Under" if var >= 0 else "OVER",
-                          delta_color="normal" if var >= 0 else "inverse")
-
-                st.dataframe(
-                    plan_result.style.format({
-                        "HC Days": "{:,.0f}",
-                        "Forecast Hrs": "{:,.0f}",
-                        "FC NT": "{:,.0f}",
-                        "FC OT": "{:,.0f}",
-                        "Blended Rate": "${:,.2f}",
-                        "Forecast Cost": "${:,.0f}",
-                        "Actual Hrs": "{:,.0f}",
-                        "Actual Cost": "${:,.0f}",
-                        "EAC Hrs": "{:,.0f}",
-                        "EAC Cost": "${:,.0f}",
-                        "Est Hrs": "{:,.0f}",
-                        "Est Cost": "${:,.0f}",
-                        "Var Hrs": "{:+,.0f}",
-                        "Var Cost": "${:+,.0f}",
-                    }).map(
-                        lambda v: "color: #C5221F; font-weight: bold" if isinstance(v, (int, float)) and v < 0 else "",
-                        subset=["Var Hrs", "Var Cost"],
-                    ),
-                    use_container_width=True, hide_index=True,
-                )
 
     # =====================================================================
     # SECTION 2: Overall Forecast (all contractors)
