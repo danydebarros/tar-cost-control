@@ -196,9 +196,12 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
 
     # Calculate forecast
     if edited_plan is not None:
+        # Ensure all values are numeric (data editor can return mixed types)
+        edited_plan = edited_plan.apply(pd.to_numeric, errors="coerce").fillna(0)
+
         plan_summary = []
         for trade in edited_plan.index:
-            hc_days = edited_plan.loc[trade].sum()
+            hc_days = float(edited_plan.loc[trade].sum())
             forecast_hrs = hc_days * hours_per_day
             nt_pct = nt_ot_split / 100
             fc_nt = forecast_hrs * nt_pct
