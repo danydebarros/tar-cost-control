@@ -92,10 +92,6 @@ with st.sidebar:
     source_options = ["Google Drive Folder"]
     if has_daily_folder:
         source_options.append("Local Folder")
-    source_options.append("Google Sheet (Live)")
-    if has_default_file:
-        source_options.append("Local Excel File")
-    source_options.append("Upload Excel File")
 
     data_source = st.radio("Load data from:", source_options, key="data_source")
 
@@ -117,35 +113,6 @@ with st.sidebar:
             value=default_folder if has_daily_folder else "",
             help="Path to folder containing daily .xls/.xlsm gate files",
             key="gate_folder",
-        )
-
-    # Google Sheet config
-    sheet_id_input = None
-    gid = "0"
-    if data_source == "Google Sheet (Live)":
-        st.caption("Paste Gate Time Data into your own public Google Sheet.")
-        raw_input = st.text_input(
-            "Google Sheet URL or ID",
-            value=st.session_state.get("gate_sheet_id", ""),
-            placeholder="Paste full URL or Sheet ID",
-            key="gate_sheet_id_input",
-        )
-        if raw_input:
-            if "/d/" in raw_input:
-                match = re.search(r"/d/([a-zA-Z0-9_-]+)", raw_input)
-                sheet_id_input = match.group(1) if match else raw_input
-                gid_match = re.search(r"gid=(\d+)", raw_input)
-                if gid_match:
-                    gid = gid_match.group(1)
-            else:
-                sheet_id_input = raw_input.strip()
-            st.session_state["gate_sheet_id"] = sheet_id_input
-
-    # File upload
-    uploaded_file = None
-    if data_source == "Upload Excel File":
-        uploaded_file = st.file_uploader(
-            "Upload Excel file", type=["xlsx", "xls"], key="file_upload"
         )
 
     # Refresh
@@ -242,28 +209,11 @@ elif data_source == "Local Folder":
         st.stop()
     processed = load_and_process_daily_folder(folder_path)
 
-elif data_source == "Google Sheet (Live)":
-    if not sheet_id_input:
-        st.info(
-            "**Setup:**\n\n"
-            "1. Create a Google Sheet on your Drive (or use your 'Nederland Gate Times' folder)\n"
-            "2. Paste the Gate Time Data with headers\n"
-            "3. Share as 'Anyone with the link > Viewer'\n"
-            "4. Paste the URL in the sidebar"
-        )
+elif data_source == "Local Folder" and has_daily_folder:
+    if not folder_path:
+        st.info("Enter the path to the folder containing daily gate files.")
         st.stop()
-    processed = load_and_process_gsheet(sheet_id_input, gid)
-    if processed:
-        st.sidebar.markdown('<p class="status-ok">Connected</p>', unsafe_allow_html=True)
-
-elif data_source == "Local Excel File" and has_default_file:
-    processed = load_and_process_file(default_file, "local")
-
-elif data_source == "Upload Excel File":
-    if uploaded_file is None:
-        st.info("Upload the TAR Cost Tracker Excel file.")
-        st.stop()
-    processed = load_and_process_file(uploaded_file, "upload")
+    processed = load_and_process_daily_folder(folder_path)
 
 if processed is None:
     st.error("Failed to load data. Check the data source and try again.")
