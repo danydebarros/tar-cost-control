@@ -15,6 +15,7 @@ from data_loader import (
     load_from_excel, load_daily_gate_files, load_gate_from_google_sheet,
     get_embedded_rate_table, clean_gate_data, build_rate_lookup,
 )
+from drive_loader import download_drive_files, extract_folder_id
 from processing import run_pipeline
 from forecast import calculate_forecast
 from config import DAILY_FILES_FOLDER
@@ -88,9 +89,9 @@ with st.sidebar:
             break
     has_default_file = default_file is not None
 
-    source_options = []
+    source_options = ["Google Drive Folder"]
     if has_daily_folder:
-        source_options.append("Daily Gate Files (Folder)")
+        source_options.append("Local Folder")
     source_options.append("Google Sheet (Live)")
     if has_default_file:
         source_options.append("Local Excel File")
@@ -98,9 +99,19 @@ with st.sidebar:
 
     data_source = st.radio("Load data from:", source_options, key="data_source")
 
-    # Folder path input for daily files
+    # Google Drive folder
+    drive_folder_url = None
+    if data_source == "Google Drive Folder":
+        drive_folder_url = st.text_input(
+            "Drive Folder URL",
+            value="https://drive.google.com/drive/u/0/folders/10hFTxkKROBsuaBxqP5rZo9j6Y_FPAPpC",
+            help="Paste the Google Drive folder URL (must be shared as 'Anyone with the link')",
+            key="drive_folder_url",
+        )
+
+    # Local folder path input
     folder_path = None
-    if data_source == "Daily Gate Files (Folder)":
+    if data_source == "Local Folder":
         folder_path = st.text_input(
             "Folder path",
             value=default_folder if has_daily_folder else "",
@@ -179,6 +190,13 @@ def load_and_process_daily_folder(folder: str):
     return result
 
 
+@st.cache_data(show_spinner=False, ttl=300)
+def load_and_process_drive_folder(folder_id: str):
+    """Download files from Google Drive folder, then process."""
+    local_dir = download_drive_files(folder_id)
+    return load_and_process_daily_folder(local_dir)
+
+
 @st.cache_data(show_spinner="Loading from Google Sheet...", ttl=300)
 def load_and_process_gsheet(sheet_id: str, gid: str):
     gate_raw = load_gate_from_google_sheet(sheet_id, gid)
@@ -211,7 +229,14 @@ def load_and_process_file(file_path_or_bytes, source_type: str):
 # Route to the right loader
 processed = None
 
-if data_source == "Daily Gate Files (Folder)":
+if data_source == "Google Drive Folder":
+    if not drive_folder_url:
+        st.info("Paste the Google Drive folder URL in the sidebar.")
+        st.stop()
+    folder_id = extract_folder_id(drive_folder_url)
+    processed = load_and_process_drive_folder(folder_id)
+
+elif data_source == "Local Folder":
     if not folder_path:
         st.info("Enter the path to the folder containing daily gate files.")
         st.stop()
