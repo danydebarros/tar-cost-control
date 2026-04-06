@@ -30,7 +30,7 @@ def list_drive_files(folder_id: str) -> list[dict]:
         return []
 
     # Extract file IDs (33-char alphanumeric strings)
-    all_ids = set(re.findall(r'["\\\]([a-zA-Z0-9_-]{33})["\\\]', resp.text))
+    all_ids = set(re.findall(r'"([a-zA-Z0-9_-]{33})"', resp.text))
     # Remove the folder ID itself
     all_ids.discard(folder_id)
 
@@ -133,7 +133,7 @@ def _bulk_list_drive_files(folder_id: str) -> list[dict]:
     except requests.exceptions.RequestException:
         return []
 
-    all_ids = set(re.findall(r'["\\\]([a-zA-Z0-9_-]{33})["\\\]', resp.text))
+    all_ids = set(re.findall(r'"([a-zA-Z0-9_-]{33})"', resp.text))
     all_ids.discard(folder_id)
 
     files = []
