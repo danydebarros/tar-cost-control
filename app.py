@@ -146,7 +146,7 @@ with st.sidebar:
     page = st.radio(
         "View",
         ["Executive Summary", "Daily Hours", "Contractor View",
-         "Trade View", "Timesheets / Invoices", "Forecast", "Allocation Gaps"],
+         "Trade View", "Timesheets / Invoices", "Forecast", "Data Audit"],
         key="nav_page",
     )
 
@@ -170,6 +170,7 @@ def load_and_process_gsheet(sheet_id: str, gid: str):
     result = run_pipeline(gate_clean, rate_lookup)
     result["rate_lookup"] = rate_lookup
     result["gate_clean"] = gate_clean
+    result["gate_raw"] = gate_raw
     return result
 
 
@@ -184,6 +185,7 @@ def load_and_process_file(file_path_or_bytes, source_type: str):
     result = run_pipeline(gate_clean, rate_lookup)
     result["rate_lookup"] = rate_lookup
     result["gate_clean"] = gate_clean
+    result["gate_raw"] = raw["gate_raw"]
     return result
 
 
@@ -234,6 +236,8 @@ st.session_state["last_refresh"] = datetime.now().strftime("%H:%M:%S")
 cost_df = processed["cost_df"]
 comparison = processed["comparison"]
 unmapped = processed["unmapped"]
+gate_raw = processed.get("gate_raw")
+gate_clean = processed.get("gate_clean")
 
 # Default forecast
 if "forecast_df" not in st.session_state:
@@ -267,5 +271,5 @@ elif page == "Timesheets / Invoices":
     timesheet_view.render(cost_df, comparison)
 elif page == "Forecast":
     forecast_view.render(cost_df, comparison)
-elif page == "Allocation Gaps":
-    allocation_gaps.render(cost_df, unmapped)
+elif page == "Data Audit":
+    allocation_gaps.render(cost_df, unmapped, gate_raw, gate_clean)
