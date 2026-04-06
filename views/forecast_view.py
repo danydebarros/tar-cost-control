@@ -151,29 +151,45 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
 
     # Build or load the daily plan
     plan_key = f"daily_plan_v2_{fc_contractor}_{forecast_days}"
+    editor_key = f"fc_plan_editor_v2_{fc_contractor}_{forecast_days}"
+    date_labels = [d.strftime("%a %m/%d") for d in forecast_dates]
+
     if plan_key not in st.session_state:
-        # Pre-fill with yesterday's headcount for every day
         plan_data = {}
         for trade in trades:
             default_hc = yesterday_hc.get(trade, 0)
             plan_data[trade] = [default_hc] * len(forecast_dates)
         st.session_state[plan_key] = plan_data
 
-    # Ensure all trades present
+    # Ensure all trades present and correct length
     for trade in trades:
         if trade not in st.session_state[plan_key]:
-            default_hc = yesterday_hc.get(trade, 0)
-            st.session_state[plan_key][trade] = [default_hc] * len(forecast_dates)
+            st.session_state[plan_key][trade] = [yesterday_hc.get(trade, 0)] * len(forecast_dates)
         elif len(st.session_state[plan_key][trade]) != len(forecast_dates):
-            default_hc = yesterday_hc.get(trade, 0)
-            st.session_state[plan_key][trade] = [default_hc] * len(forecast_dates)
+            st.session_state[plan_key][trade] = [yesterday_hc.get(trade, 0)] * len(forecast_dates)
 
-    # Build editable DataFrame
+    # If the editor already has state from a previous edit, use that as source of truth
+    if editor_key in st.session_state:
+        editor_state = st.session_state[editor_key]
+        if "edited_rows" in editor_state:
+            # Apply edits from the editor state back to our plan data
+            plan_data = st.session_state[plan_key]
+            trade_list = sorted(plan_data.keys())
+            for row_str, changes in editor_state["edited_rows"].items():
+                row_idx = int(row_str)
+                if row_idx < len(trade_list):
+                    trade_name = trade_list[row_idx]
+                    for col_str, val in changes.items():
+                        col_idx = int(col_str)
+                        if col_idx < len(plan_data[trade_name]):
+                            plan_data[trade_name][col_idx] = val
+            st.session_state[plan_key] = plan_data
+
+    # Build DataFrame from current plan state
     plan_df = pd.DataFrame(
         st.session_state[plan_key],
-        index=forecast_dates,
+        index=date_labels,
     ).T
-    plan_df.columns = [d.strftime("%a %m/%d") for d in forecast_dates]
     plan_df.index.name = "Trade"
 
     st.caption(
@@ -184,15 +200,8 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     edited_plan = st.data_editor(
         plan_df,
         use_container_width=True,
-        key=f"fc_plan_editor_v2_{fc_contractor}_{forecast_days}",
+        key=editor_key,
     )
-
-    # Save back
-    if edited_plan is not None:
-        st.session_state[plan_key] = {
-            trade: list(edited_plan.loc[trade].values)
-            for trade in edited_plan.index
-        }
 
     # Calculate forecast
     if edited_plan is not None:
