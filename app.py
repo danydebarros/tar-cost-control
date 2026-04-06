@@ -23,6 +23,7 @@ from views import (
     trade_view,
     forecast_view,
     allocation_gaps,
+    timesheet_view,
 )
 
 
@@ -145,7 +146,7 @@ with st.sidebar:
     page = st.radio(
         "View",
         ["Executive Summary", "Daily Hours", "Contractor View",
-         "Trade View", "Forecast", "Allocation Gaps"],
+         "Trade View", "Timesheets / Invoices", "Forecast", "Allocation Gaps"],
         key="nav_page",
     )
 
@@ -262,6 +263,8 @@ elif page == "Contractor View":
     contractor_view.render(cost_df, comparison)
 elif page == "Trade View":
     trade_view.render(cost_df, comparison)
+elif page == "Timesheets / Invoices":
+    timesheet_view.render(cost_df, comparison)
 elif page == "Forecast":
     forecast_view.render(cost_df, comparison)
 elif page == "Allocation Gaps":
