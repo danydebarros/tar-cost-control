@@ -118,8 +118,10 @@ with st.sidebar:
     # Refresh
     if st.button("Refresh Data", type="primary", use_container_width=True):
         st.cache_data.clear()
+        # Bump refresh counter to bust any remaining caches
+        st.session_state["refresh_counter"] = st.session_state.get("refresh_counter", 0) + 1
         for key in list(st.session_state.keys()):
-            if key in ("forecast_df",):
+            if key in ("forecast_df", "forecast_loaded"):
                 del st.session_state[key]
         st.rerun()
 
@@ -158,8 +160,9 @@ def load_and_process_daily_folder(folder: str):
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-def load_and_process_drive_folder(folder_id: str):
-    """Download files from Google Drive folder, then process."""
+def load_and_process_drive_folder(folder_id: str, _refresh_key: str = ""):
+    """Download files from Google Drive folder, then process.
+    _refresh_key is used to bust the cache on Refresh."""
     local_dir = download_drive_files(folder_id)
     return load_and_process_daily_folder(local_dir)
 
@@ -201,7 +204,8 @@ if data_source == "Google Drive Folder":
         st.info("Paste the Google Drive folder URL in the sidebar.")
         st.stop()
     folder_id = extract_folder_id(drive_folder_url)
-    processed = load_and_process_drive_folder(folder_id)
+    refresh_key = str(st.session_state.get("refresh_counter", 0))
+    processed = load_and_process_drive_folder(folder_id, _refresh_key=refresh_key)
 
 elif data_source == "Local Folder":
     if not folder_path:

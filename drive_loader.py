@@ -77,13 +77,18 @@ def list_drive_files(folder_id: str) -> list[dict]:
     return files
 
 
-def download_drive_files(folder_id: str, local_dir: str = None) -> str:
+def download_drive_files(folder_id: str, local_dir: str = None, force: bool = False) -> str:
     """Download all gate files from a Drive folder to a local temp directory.
 
     Returns the path to the local directory containing the files.
+    If force=True, re-downloads all files.
     """
     if local_dir is None:
         local_dir = os.path.join(tempfile.gettempdir(), f"tar_gate_{folder_id[:8]}")
+
+    if force and os.path.isdir(local_dir):
+        shutil.rmtree(local_dir)
+
     os.makedirs(local_dir, exist_ok=True)
 
     # Check what we already have locally
