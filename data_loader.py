@@ -153,6 +153,20 @@ def _parse_single_gate_file(path: str, fname: str) -> list:
         elapsed_str = str(row.iloc[col_map["elapsed"]]) if "elapsed" in col_map else ""
         elapsed_hours = _parse_elapsed(elapsed_str)
 
+        # Apply default clock-out if missing
+        # Day shift: default out = 19:00 same day
+        # Night shift: default out = 07:00 next day
+        if in_dt and (out_dt is None) and (not elapsed_hours or elapsed_hours <= 0):
+            if is_night:
+                # Night shift: clock out at 07:00 next morning
+                out_dt = in_dt.replace(hour=7, minute=0, second=0) + timedelta(days=1)
+            else:
+                # Day shift: clock out at 19:00 same day
+                out_dt = in_dt.replace(hour=19, minute=0, second=0)
+            # Recalculate elapsed
+            if out_dt > in_dt:
+                elapsed_hours = (out_dt - in_dt).total_seconds() / 3600
+
         # Calculate hours: use elapsed if valid, else compute from in/out
         if elapsed_hours and elapsed_hours > 0:
             onsite_hours = elapsed_hours
