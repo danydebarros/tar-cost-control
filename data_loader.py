@@ -78,6 +78,19 @@ def load_daily_gate_files(folder_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.DataFrame(all_records)
+
+    # Deduplicate: when a person appears in both day and night files
+    # for the same date, keep the record with the most paid hours
+    before = len(df)
+    df = df.sort_values("Less: Lunch Deduction", ascending=False)
+    df = df.drop_duplicates(
+        subset=["Name and Surname", "Contractor", "Date"],
+        keep="first",
+    )
+    dupes = before - len(df)
+    if dupes > 0:
+        st.caption(f"Removed {dupes} duplicate records (kept highest hours per person/date)")
+
     st.caption(f"Loaded {len(df):,} records from {len(files)} files")
     return df
 
@@ -153,11 +166,17 @@ def _parse_single_gate_file(path: str, fname: str) -> list:
         elapsed_str = str(row.iloc[col_map["elapsed"]]) if "elapsed" in col_map else ""
         elapsed_hours = _parse_elapsed(elapsed_str)
 
+        # Determine actual shift: if clock-in is after 17:00, it's night shift
+        # regardless of the filename (day reports can contain evening clock-ins)
+        actual_night = is_night
+        if in_dt and in_dt.hour >= 17:
+            actual_night = True
+
         # Apply default clock-out if missing
         # Day shift: default out = 19:00 same day
         # Night shift: default out = 07:00 next day
         if in_dt and (out_dt is None) and (not elapsed_hours or elapsed_hours <= 0):
-            if is_night:
+            if actual_night:
                 # Night shift: clock out at 07:00 next morning
                 out_dt = in_dt.replace(hour=7, minute=0, second=0) + timedelta(days=1)
             else:
