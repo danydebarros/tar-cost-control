@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from forecast import calculate_forecast, get_daily_burn_rate
 from forecast_store import save_forecast, load_forecast
 from components import metric_row, eac_chart, COLORS
-from config import PROJECT_END
+from config import PROJECT_END, PLANNED_DAILY_HOURS
 import plotly.graph_objects as go
 
 
@@ -124,84 +124,80 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
             blended = 0
         trade_rates[t] = round(blended, 2)
 
-    # Get yesterday's actual headcount per trade (to use as default)
-    yesterday = last_actual  # use last actual date as "yesterday"
-    yesterday_data = cost_df[
-        (cost_df["contractor"] == fc_contractor) & (cost_df["date"].dt.date == yesterday)
-    ]
-    yesterday_hc = yesterday_data.groupby("mapped_trade")["person_id"].nunique().to_dict()
-
     # Generate forecast dates
     forecast_dates = pd.date_range(start=forecast_start, periods=forecast_days, freq="D")
-
-    # Settings
-    col1, col2 = st.columns(2)
-    with col1:
-        hours_per_day = st.number_input(
-            "Hours per person per day", min_value=4.0, max_value=16.0,
-            value=10.0, step=0.5, key="fc_hrs_per_day",
-        )
-    with col2:
-        nt_ot_split = st.slider(
-            "Expected NT/OT split (% NT)",
-            min_value=50, max_value=100, value=75, step=5,
-            help="What % of hours will be NT vs OT",
-            key="fc_nt_pct",
-        )
-
-    # Build the daily plan
-    plan_key = f"daily_plan_v2_{fc_contractor}_{forecast_days}"
     date_labels = [d.strftime("%a %m/%d") for d in forecast_dates]
 
-    # Initialize plan for this contractor if not exists
+    # Build planned baseline from estimate tabs
+    from collections import defaultdict
+    planned_rows = PLANNED_DAILY_HOURS.get(fc_contractor, [])
+    planned_by_trade = defaultdict(list)
+    for pr in planned_rows:
+        base = pr["trade"]
+        for suffix in [" NT", " OT", " DT", " ST", " - Standard", " - Overtime",
+                       " NT (Pre/Post)", " / ST"]:
+            if base.endswith(suffix):
+                base = base[:-len(suffix)]
+                break
+        planned_by_trade[base].append(pr)
+
+    def _planned_hours(trade_name, dt_str):
+        """Get total planned hours for a trade on a date (sum across NT/OT/DT)."""
+        total = 0
+        for pr in planned_by_trade.get(trade_name, []):
+            total += pr["daily"].get(dt_str, 0) * pr["qty"]
+        return round(total, 1)
+
+    # Build or load the daily plan
+    plan_key = f"daily_plan_v2_{fc_contractor}_{forecast_days}"
+
     if plan_key not in st.session_state:
         plan_data = {}
         for trade in trades:
-            plan_data[trade] = [yesterday_hc.get(trade, 0)] * len(forecast_dates)
+            plan_data[trade] = [
+                _planned_hours(trade, fd.strftime("%Y-%m-%d"))
+                for fd in forecast_dates
+            ]
         st.session_state[plan_key] = plan_data
 
-    # Ensure all trades present
     for trade in trades:
         if trade not in st.session_state[plan_key]:
-            st.session_state[plan_key][trade] = [yesterday_hc.get(trade, 0)] * len(forecast_dates)
+            st.session_state[plan_key][trade] = [
+                _planned_hours(trade, fd.strftime("%Y-%m-%d"))
+                for fd in forecast_dates
+            ]
         elif len(st.session_state[plan_key][trade]) != len(forecast_dates):
-            st.session_state[plan_key][trade] = [yesterday_hc.get(trade, 0)] * len(forecast_dates)
+            st.session_state[plan_key][trade] = [
+                _planned_hours(trade, fd.strftime("%Y-%m-%d"))
+                for fd in forecast_dates
+            ]
 
     # Build DataFrame
     plan_df = pd.DataFrame(
-        st.session_state[plan_key],
-        index=date_labels,
+        st.session_state[plan_key], index=date_labels,
     ).T
     plan_df.index.name = "Trade"
 
     st.caption(
-        f"Pre-filled with {yesterday.strftime('%b %d')} actual headcount. "
-        f"Edit any cell to adjust. Set to 0 to remove a trade from a day."
+        "Pre-filled with **planned hours from estimate**. "
+        "Edit any cell to adjust. Values are total hours per trade per day."
     )
 
-    edited_plan = st.data_editor(
-        plan_df,
-        use_container_width=True,
-    )
+    edited_plan = st.data_editor(plan_df, use_container_width=True)
 
-    # Persist edits back to session state from the returned DataFrame
+    # Persist edits
     if edited_plan is not None:
         for trade in edited_plan.index:
             vals = pd.to_numeric(edited_plan.loc[trade], errors="coerce").fillna(0)
-            st.session_state[plan_key][trade] = [int(v) for v in vals.values]
+            st.session_state[plan_key][trade] = [float(v) for v in vals.values]
 
     # Calculate forecast
     if edited_plan is not None:
-        # Ensure all values are numeric (data editor can return mixed types)
         edited_plan = edited_plan.apply(pd.to_numeric, errors="coerce").fillna(0)
 
         plan_summary = []
         for trade in edited_plan.index:
-            hc_days = float(edited_plan.loc[trade].sum())
-            forecast_hrs = hc_days * hours_per_day
-            nt_pct = nt_ot_split / 100
-            fc_nt = forecast_hrs * nt_pct
-            fc_ot = forecast_hrs * (1 - nt_pct)
+            forecast_hrs = float(edited_plan.loc[trade].sum())
             rate = trade_rates.get(trade, 0)
             fc_cost = forecast_hrs * rate
 
@@ -213,11 +209,7 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
 
             plan_summary.append({
                 "Trade": trade,
-                "Yesterday HC": yesterday_hc.get(trade, 0),
-                "HC Days": hc_days,
                 "Forecast Hrs": forecast_hrs,
-                "FC NT": fc_nt,
-                "FC OT": fc_ot,
                 "Blended Rate": rate,
                 "Forecast Cost": fc_cost,
                 "Actual Hrs": act_hrs,
@@ -246,11 +238,7 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
 
         st.dataframe(
             plan_result.style.format({
-                "Yesterday HC": "{:,.0f}",
-                "HC Days": "{:,.0f}",
                 "Forecast Hrs": "{:,.0f}",
-                "FC NT": "{:,.0f}",
-                "FC OT": "{:,.0f}",
                 "Blended Rate": "${:,.2f}",
                 "Forecast Cost": "${:,.0f}",
                 "Actual Hrs": "{:,.0f}",
