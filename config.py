@@ -86,7 +86,7 @@ CONTRACTOR_TRADE_MAPPINGS = {
         "Crane Operator":   {"mapped_trade": "Rigger", "zero_rate": False},
         "Rigger":           {"mapped_trade": "Rigger", "zero_rate": False},
         "Supervisor":       {"mapped_trade": "Rigger", "zero_rate": False},
-        "Equipment":        {"mapped_trade": "Equipment", "zero_rate": False},
+        "Equipment":        {"mapped_trade": "Equipment", "zero_rate": True},
     },
 }
 
@@ -217,6 +217,11 @@ EMBEDDED_RATE_TABLE = [
     {"Contractor": "Spartan", "Trade": "Project Manager", "Time Type": "ST", "Rate": 42, "Estimate Hours": 240, "Estimate Cost": 10080.0},
     {"Contractor": "Spartan", "Trade": "Technician", "Time Type": "ST", "Rate": 35, "Estimate Hours": 528, "Estimate Cost": 18480.0},
     {"Contractor": "Sterling", "Trade": "Rigger", "Time Type": "ST", "Rate": 90, "Estimate Hours": 1728, "Estimate Cost": 155520.0},
+    {"Contractor": "Sterling", "Trade": "Crane - 600 Ton", "Time Type": "ST", "Rate": 550, "Estimate Hours": 0, "Estimate Cost": 0},
+    {"Contractor": "Sterling", "Trade": "Crane - 175 Ton", "Time Type": "ST", "Rate": 265, "Estimate Hours": 0, "Estimate Cost": 0},
+    {"Contractor": "Sterling", "Trade": "Crane - 125 Ton", "Time Type": "ST", "Rate": 220, "Estimate Hours": 0, "Estimate Cost": 0},
+    {"Contractor": "Sterling", "Trade": "Crane - 30 Ton", "Time Type": "ST", "Rate": 140, "Estimate Hours": 0, "Estimate Cost": 0},
+    {"Contractor": "Sterling", "Trade": "Crane - 15 Ton", "Time Type": "ST", "Rate": 125, "Estimate Hours": 0, "Estimate Cost": 0},
 ]
 PLANNED_DAILY_HOURS = {
     "Axis": [
@@ -294,5 +299,10 @@ PLANNED_DAILY_HOURS = {
     ],
     "Sterling": [
         {"trade": "Rigger", "rate": 90.0, "qty": 1.0, "daily": {"2026-03-16": 72.0, "2026-03-17": 72.0, "2026-03-18": 72.0, "2026-03-19": 72.0, "2026-03-20": 72.0, "2026-03-21": 72.0, "2026-03-22": 72.0, "2026-03-23": 72.0, "2026-03-24": 72.0, "2026-03-25": 72.0, "2026-03-26": 72.0, "2026-03-27": 72.0, "2026-03-28": 72.0, "2026-03-29": 72.0, "2026-03-30": 72.0, "2026-03-31": 72.0, "2026-04-01": 72.0, "2026-04-02": 72.0, "2026-04-03": 72.0, "2026-04-04": 72.0, "2026-04-05": 72.0, "2026-04-06": 72.0, "2026-04-07": 72.0, "2026-04-08": 72.0}},
+        {"trade": "Crane - 600 Ton", "rate": 550.0, "qty": 1.0, "daily": {}},
+        {"trade": "Crane - 175 Ton", "rate": 265.0, "qty": 1.0, "daily": {}},
+        {"trade": "Crane - 125 Ton", "rate": 220.0, "qty": 1.0, "daily": {}},
+        {"trade": "Crane - 30 Ton", "rate": 140.0, "qty": 1.0, "daily": {}},
+        {"trade": "Crane - 15 Ton", "rate": 125.0, "qty": 1.0, "daily": {}},
     ],
 }

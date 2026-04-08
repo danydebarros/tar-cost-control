@@ -124,6 +124,22 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
             blended = 0
         trade_rates[t] = round(blended, 2)
 
+    # Also include trades from planned daily hours that may not have actuals yet
+    # (e.g. crane equipment lines)
+    from data_loader import get_embedded_rate_table, build_rate_lookup
+    rate_table = get_embedded_rate_table()
+    all_rate_trades = rate_table[rate_table["Contractor"] == fc_contractor]["Trade"].unique()
+    for t in all_rate_trades:
+        if t not in trades:
+            trades.append(t)
+        if t not in trade_rates:
+            rate_row = rate_table[
+                (rate_table["Contractor"] == fc_contractor) & (rate_table["Trade"] == t)
+            ]
+            if len(rate_row) > 0:
+                trade_rates[t] = round(rate_row["Rate"].values[0], 2)
+    trades = sorted(trades)
+
     # Generate forecast dates
     forecast_dates = pd.date_range(start=forecast_start, periods=forecast_days, freq="D")
     date_labels = [d.strftime("%a %m/%d") for d in forecast_dates]
