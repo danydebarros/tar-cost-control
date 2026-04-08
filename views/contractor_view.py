@@ -136,19 +136,20 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     ccomp = comparison[comparison["contractor"] == selected]
 
     # Trade breakdown table
-    trade_summary = ccomp[[
-        "mapped_trade", "actual_nt_hours", "actual_ot_hours",
-        "actual_total_hours", "actual_total_cost",
-        "est_hours", "est_cost", "hours_variance", "cost_variance",
-    ]].copy()
-    trade_summary.columns = [
-        "Trade", "NT Hours", "OT Hours", "Total Hours", "Actual Cost",
-        "Est Hours", "Est Cost", "Hours Var", "Cost Var",
-    ]
+    trade_cols = ["mapped_trade", "actual_nt_hours", "actual_ot_hours"]
+    trade_names = ["Trade", "NT Hours", "OT Hours"]
+    if has_dt and "actual_dt_hours" in ccomp.columns:
+        trade_cols.append("actual_dt_hours")
+        trade_names.append("DT Hours")
+    trade_cols += ["actual_total_hours", "actual_total_cost",
+                   "est_hours", "est_cost", "hours_variance", "cost_variance"]
+    trade_names += ["Total Hours", "Actual Cost", "Est Hours", "Est Cost", "Hours Var", "Cost Var"]
+
+    trade_summary = ccomp[trade_cols].copy()
+    trade_summary.columns = trade_names
     trade_summary = trade_summary.sort_values("Actual Cost", ascending=False)
 
-    st.dataframe(
-        trade_summary.style.format({
+    trade_fmt = {
             "NT Hours": "{:,.1f}",
             "OT Hours": "{:,.1f}",
             "Total Hours": "{:,.1f}",
@@ -157,6 +158,12 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
             "Est Cost": "${:,.0f}",
             "Hours Var": "{:+,.0f}",
             "Cost Var": "${:+,.0f}",
+    }
+    if "DT Hours" in trade_summary.columns:
+        trade_fmt["DT Hours"] = "{:,.1f}"
+
+    st.dataframe(
+        trade_summary.style.format({**trade_fmt,
         }).map(
             lambda v: "color: #C5221F; font-weight: bold" if isinstance(v, (int, float)) and v < 0 else "",
             subset=["Hours Var", "Cost Var"],
@@ -165,11 +172,14 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     )
 
     # Daily hours trend for selected contractor
-    daily_c = cdf.groupby("date").agg(
-        nt=("nt_hours", "sum"),
-        ot=("ot_hours", "sum"),
-        headcount=("person_id", "nunique"),
-    ).reset_index().sort_values("date")
+    agg_dict_daily = {
+        "nt": ("nt_hours", "sum"),
+        "ot": ("ot_hours", "sum"),
+        "headcount": ("person_id", "nunique"),
+    }
+    if "dt_hours" in cdf.columns:
+        agg_dict_daily["dt"] = ("dt_hours", "sum")
+    daily_c = cdf.groupby("date").agg(**agg_dict_daily).reset_index().sort_values("date")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -178,6 +188,9 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
                              marker_color=COLORS["nt"]))
         fig.add_trace(go.Bar(x=daily_c["date"], y=daily_c["ot"], name="OT",
                              marker_color=COLORS["ot"]))
+        if "dt" in daily_c.columns and daily_c["dt"].sum() > 0:
+            fig.add_trace(go.Bar(x=daily_c["date"], y=daily_c["dt"], name="DT",
+                                 marker_color="#9C27B0"))
         fig.update_layout(barmode="stack", height=300, title=f"{selected} Daily Hours",
                           margin=dict(l=40, r=20, t=40, b=40),
                           plot_bgcolor="white", legend=dict(orientation="h", y=-0.2))
