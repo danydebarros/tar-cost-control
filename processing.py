@@ -141,17 +141,27 @@ def calculate_costs(df: pd.DataFrame, rate_lookup: pd.DataFrame) -> pd.DataFrame
     # Apply zero_rate flag
     merged.loc[merged["zero_rate"] == True, ["nt_rate", "ot_rate", "dt_rate", "st_rate"]] = 0
 
-    # For Spartan (ST rate), use st_rate for all hours
-    spartan_mask = merged["contractor"] == "Spartan"
-    merged.loc[spartan_mask & (merged["nt_rate"] == 0) & (merged["st_rate"] > 0), "nt_rate"] = \
-        merged.loc[spartan_mask & (merged["nt_rate"] == 0) & (merged["st_rate"] > 0), "st_rate"]
-    merged.loc[spartan_mask & (merged["ot_rate"] == 0) & (merged["st_rate"] > 0), "ot_rate"] = \
-        merged.loc[spartan_mask & (merged["ot_rate"] == 0) & (merged["st_rate"] > 0), "st_rate"]
+    # For Spartan and Sterling (ST rate only), use st_rate for all hours
+    st_contractors = merged["contractor"].isin(["Spartan", "Sterling"])
+    merged.loc[st_contractors & (merged["nt_rate"] == 0) & (merged["st_rate"] > 0), "nt_rate"] = \
+        merged.loc[st_contractors & (merged["nt_rate"] == 0) & (merged["st_rate"] > 0), "st_rate"]
+    merged.loc[st_contractors & (merged["ot_rate"] == 0) & (merged["st_rate"] > 0), "ot_rate"] = \
+        merged.loc[st_contractors & (merged["ot_rate"] == 0) & (merged["st_rate"] > 0), "st_rate"]
+
+    # Axis Sunday rule: all hours on Sunday use DT (double time) rate
+    merged["dt_hours"] = 0.0
+    axis_sunday = (merged["contractor"] == "Axis") & (merged["date"].dt.dayofweek == 6)
+    if axis_sunday.any():
+        # Move all hours to DT on Sundays for Axis
+        merged.loc[axis_sunday, "dt_hours"] = merged.loc[axis_sunday, "total_hours"]
+        merged.loc[axis_sunday, "nt_hours"] = 0
+        merged.loc[axis_sunday, "ot_hours"] = 0
 
     # Calculate costs
     merged["nt_cost"] = merged["nt_hours"] * merged["nt_rate"]
     merged["ot_cost"] = merged["ot_hours"] * merged["ot_rate"]
-    merged["total_cost"] = merged["nt_cost"] + merged["ot_cost"]
+    merged["dt_cost"] = merged["dt_hours"] * merged["dt_rate"]
+    merged["total_cost"] = merged["nt_cost"] + merged["ot_cost"] + merged["dt_cost"]
 
     # Flag rows with no rate found (potential allocation gaps)
     merged["has_rate"] = (merged["nt_rate"] > 0) | (merged["ot_rate"] > 0) | (merged["st_rate"] > 0) | merged["zero_rate"]

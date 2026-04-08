@@ -19,6 +19,7 @@ CONTRACTOR_NAME_MAP = {
     "Spartan Speciality": "Spartan",
     "PMI": "PMI",
     "PK Safety": "PK Safety",
+    "Sterling": "Sterling",
 }
 
 # Default folder for daily gate files
@@ -80,6 +81,12 @@ CONTRACTOR_TRADE_MAPPINGS = {
         "Hydroblast Crew":  {"mapped_trade": "Operator", "zero_rate": False},
         "Supervisor":       {"mapped_trade": "Project Manager", "zero_rate": False},
         "Foreman":          {"mapped_trade": "Technician", "zero_rate": False},
+    },
+    "Sterling": {
+        "Crane Operator":   {"mapped_trade": "Rigger", "zero_rate": False},
+        "Rigger":           {"mapped_trade": "Rigger", "zero_rate": False},
+        "Supervisor":       {"mapped_trade": "Rigger", "zero_rate": False},
+        "Equipment":        {"mapped_trade": "Equipment", "zero_rate": False},
     },
 }
 
@@ -209,6 +216,7 @@ EMBEDDED_RATE_TABLE = [
     {"Contractor": "Spartan", "Trade": "Operator", "Time Type": "ST", "Rate": 38, "Estimate Hours": 336, "Estimate Cost": 12768.0},
     {"Contractor": "Spartan", "Trade": "Project Manager", "Time Type": "ST", "Rate": 42, "Estimate Hours": 240, "Estimate Cost": 10080.0},
     {"Contractor": "Spartan", "Trade": "Technician", "Time Type": "ST", "Rate": 35, "Estimate Hours": 528, "Estimate Cost": 18480.0},
+    {"Contractor": "Sterling", "Trade": "Rigger", "Time Type": "ST", "Rate": 90, "Estimate Hours": 1728, "Estimate Cost": 155520.0},
 ]
 PLANNED_DAILY_HOURS = {
     "Axis": [
@@ -283,5 +291,8 @@ PLANNED_DAILY_HOURS = {
         {"trade": "Project Manager", "rate": 42.0, "qty": 1.0, "daily": {"2026-03-12": 16.0, "2026-03-16": 16.0, "2026-03-17": 16.0, "2026-03-18": 16.0, "2026-03-19": 16.0, "2026-03-20": 16.0, "2026-03-23": 16.0, "2026-03-24": 16.0, "2026-03-25": 16.0, "2026-03-26": 16.0, "2026-03-27": 16.0, "2026-03-30": 16.0, "2026-03-31": 16.0, "2026-04-01": 16.0, "2026-04-02": 16.0}},
         {"trade": "Operator / ST", "rate": 38.0, "qty": 1.0, "daily": {"2026-03-16": 24.0, "2026-03-17": 24.0, "2026-03-18": 24.0, "2026-03-19": 24.0, "2026-03-20": 24.0, "2026-03-23": 24.0, "2026-03-24": 24.0, "2026-03-25": 24.0, "2026-03-26": 24.0, "2026-03-27": 24.0, "2026-03-30": 24.0, "2026-03-31": 24.0, "2026-04-01": 24.0, "2026-04-02": 24.0}},
         {"trade": "Technician / ST", "rate": 35.0, "qty": 1.0, "daily": {"2026-03-12": 32.0, "2026-03-16": 32.0, "2026-03-17": 32.0, "2026-03-18": 32.0, "2026-03-19": 32.0, "2026-03-20": 32.0, "2026-03-23": 32.0, "2026-03-24": 32.0, "2026-03-25": 32.0, "2026-03-26": 32.0, "2026-03-27": 32.0, "2026-03-30": 32.0, "2026-03-31": 32.0, "2026-04-01": 32.0, "2026-04-02": 32.0, "2026-04-03": 32.0, "2026-04-06": 16.0}},
+    ],
+    "Sterling": [
+        {"trade": "Rigger", "rate": 90.0, "qty": 1.0, "daily": {"2026-03-16": 72.0, "2026-03-17": 72.0, "2026-03-18": 72.0, "2026-03-19": 72.0, "2026-03-20": 72.0, "2026-03-21": 72.0, "2026-03-22": 72.0, "2026-03-23": 72.0, "2026-03-24": 72.0, "2026-03-25": 72.0, "2026-03-26": 72.0, "2026-03-27": 72.0, "2026-03-28": 72.0, "2026-03-29": 72.0, "2026-03-30": 72.0, "2026-03-31": 72.0, "2026-04-01": 72.0, "2026-04-02": 72.0, "2026-04-03": 72.0, "2026-04-04": 72.0, "2026-04-05": 72.0, "2026-04-06": 72.0, "2026-04-07": 72.0, "2026-04-08": 72.0}},
     ],
 }
