@@ -11,15 +11,23 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     st.header("Contractor View")
 
     # --- Summary table ---
-    contractor_summary = comparison.groupby("contractor").agg(
-        est_hours=("est_hours", "sum"),
-        actual_nt=("actual_nt_hours", "sum"),
-        actual_ot=("actual_ot_hours", "sum"),
-        actual_total=("actual_total_hours", "sum"),
-        est_cost=("est_cost", "sum"),
-        actual_cost=("actual_total_cost", "sum"),
-        headcount=("headcount", "sum"),
-    ).reset_index()
+    # Get DT hours if available
+    has_dt = "actual_dt_hours" in comparison.columns
+
+    agg_dict = {
+        "est_hours": ("est_hours", "sum"),
+        "actual_nt": ("actual_nt_hours", "sum"),
+        "actual_ot": ("actual_ot_hours", "sum"),
+        "actual_total": ("actual_total_hours", "sum"),
+        "est_cost": ("est_cost", "sum"),
+        "actual_cost": ("actual_total_cost", "sum"),
+        "headcount": ("headcount", "sum"),
+    }
+    if has_dt:
+        agg_dict["actual_dt"] = ("actual_dt_hours", "sum")
+        agg_dict["actual_dt_cost"] = ("actual_dt_cost", "sum")
+
+    contractor_summary = comparison.groupby("contractor").agg(**agg_dict).reset_index()
 
     contractor_summary["hours_variance"] = contractor_summary["est_hours"] - contractor_summary["actual_total"]
     contractor_summary["cost_variance"] = contractor_summary["est_cost"] - contractor_summary["actual_cost"]
@@ -32,18 +40,39 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
         contractor_summary["cost_variance"] / contractor_summary["est_cost"] * 100, 0
     )
 
+    # Equipment/Other costs from session state
+    equip_costs = {}
+    equip_actuals = st.session_state.get("equip_actuals", {})
+    equip_rates = st.session_state.get("equip_rates", {})
+    for contractor in contractor_summary["contractor"]:
+        c_equip = equip_actuals.get(contractor, {})
+        c_rates = equip_rates.get(contractor, {})
+        total = 0
+        for item, hours_list in c_equip.items():
+            rate = c_rates.get(item, 0)
+            total += sum(hours_list) * rate
+        equip_costs[contractor] = total
+    contractor_summary["equip_cost"] = contractor_summary["contractor"].map(equip_costs).fillna(0)
+    contractor_summary["total_with_equip"] = contractor_summary["actual_cost"] + contractor_summary["equip_cost"]
+
     display_cols = {
         "contractor": "Contractor",
         "est_hours": "Est Hours",
         "actual_nt": "NT Hours",
         "actual_ot": "OT Hours",
+    }
+    if has_dt:
+        display_cols["actual_dt"] = "DT Hours"
+    display_cols.update({
         "actual_total": "Total Hours",
         "est_cost": "Est Cost",
-        "actual_cost": "Actual Cost",
+        "actual_cost": "Labor Cost",
+        "equip_cost": "Equip/Other",
+        "total_with_equip": "Total Cost",
         "cost_variance": "Cost Variance",
         "cost_var_pct": "Var %",
         "ot_pct": "OT %",
-    }
+    })
 
     display = contractor_summary[list(display_cols.keys())].copy()
     display.columns = list(display_cols.values())
@@ -60,14 +89,21 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
         totals_row["Var %"] = totals_row["Cost Variance"] / total_est * 100
     display = pd.concat([display, totals_row], ignore_index=True)
 
-    st.dataframe(
-        display.style.format({
+    fmt = {
             "Est Hours": "{:,.0f}",
             "NT Hours": "{:,.0f}",
             "OT Hours": "{:,.0f}",
             "Total Hours": "{:,.0f}",
             "Est Cost": "${:,.0f}",
-            "Actual Cost": "${:,.0f}",
+            "Labor Cost": "${:,.0f}",
+            "Equip/Other": "${:,.0f}",
+            "Total Cost": "${:,.0f}",
+    }
+    if "DT Hours" in display.columns:
+        fmt["DT Hours"] = "{:,.0f}"
+
+    st.dataframe(
+        display.style.format({**fmt,
             "Cost Variance": "${:+,.0f}",
             "Var %": "{:+.1f}%",
             "OT %": "{:.1f}%",

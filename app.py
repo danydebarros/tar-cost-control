@@ -132,7 +132,7 @@ with st.sidebar:
         "View",
         ["Executive Summary", "Hours Drill-Down", "Daily Hours",
          "Contractor View", "Trade View", "Timesheets / Invoices",
-         "Forecast", "Equipment", "Data Audit"],
+         "Forecast", "Equipment / Other", "Data Audit"],
         key="nav_page",
     )
 
@@ -267,7 +267,7 @@ elif page == "Timesheets / Invoices":
     timesheet_view.render(cost_df, comparison)
 elif page == "Forecast":
     forecast_view.render(cost_df, comparison)
-elif page == "Equipment":
+elif page == "Equipment / Other":
     equipment_view.render(cost_df, comparison)
 elif page == "Data Audit":
     allocation_gaps.render(cost_df, unmapped, gate_raw, gate_clean)

@@ -179,9 +179,11 @@ def build_estimate_comparison(cost_df: pd.DataFrame, rate_lookup: pd.DataFrame) 
     actuals = cost_df.groupby(["contractor", "mapped_trade"]).agg(
         actual_nt_hours=("nt_hours", "sum"),
         actual_ot_hours=("ot_hours", "sum"),
+        actual_dt_hours=("dt_hours", "sum"),
         actual_total_hours=("total_hours", "sum"),
         actual_nt_cost=("nt_cost", "sum"),
         actual_ot_cost=("ot_cost", "sum"),
+        actual_dt_cost=("dt_cost", "sum"),
         actual_total_cost=("total_cost", "sum"),
         headcount=("person_id", "nunique"),
         days_worked=("date", "nunique"),
