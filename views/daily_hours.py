@@ -57,16 +57,19 @@ def render(cost_df: pd.DataFrame):
     st.subheader("Daily Hours by Trade")
 
     if hour_type == "NT / OT Split":
-        daily_agg = filtered.groupby("date").agg(
-            NT=("nt_hours", "sum"),
-            OT=("ot_hours", "sum"),
-        ).reset_index()
+        agg_dict = dict(NT=("nt_hours", "sum"), OT=("ot_hours", "sum"))
+        if "dt_hours" in filtered.columns:
+            agg_dict["DT"] = ("dt_hours", "sum")
+        daily_agg = filtered.groupby("date").agg(**agg_dict).reset_index()
 
         fig = go.Figure()
         fig.add_trace(go.Bar(x=daily_agg["date"], y=daily_agg["NT"],
                              name="NT", marker_color=COLORS["nt"]))
         fig.add_trace(go.Bar(x=daily_agg["date"], y=daily_agg["OT"],
                              name="OT", marker_color=COLORS["ot"]))
+        if "DT" in daily_agg.columns:
+            fig.add_trace(go.Bar(x=daily_agg["date"], y=daily_agg["DT"],
+                                 name="DT", marker_color=COLORS.get("dt", "#9C27B0")))
         fig.update_layout(barmode="stack", height=400,
                           margin=dict(l=40, r=20, t=30, b=40),
                           xaxis_title="Date", yaxis_title="Hours",
@@ -89,12 +92,15 @@ def render(cost_df: pd.DataFrame):
     # --- Daily Hours Table ---
     st.subheader("Daily Hours Table")
 
-    pivot_data = filtered.groupby(["date", "mapped_trade"]).agg(
+    pivot_agg = dict(
         total=("total_hours", "sum"),
         nt=("nt_hours", "sum"),
         ot=("ot_hours", "sum"),
         headcount=("person_id", "nunique"),
-    ).reset_index()
+    )
+    if "dt_hours" in filtered.columns:
+        pivot_agg["dt"] = ("dt_hours", "sum")
+    pivot_data = filtered.groupby(["date", "mapped_trade"]).agg(**pivot_agg).reset_index()
 
     # Pivot for display
     if hour_type == "NT / OT Split":
@@ -108,13 +114,25 @@ def render(cost_df: pd.DataFrame):
         pivot_nt.columns = [d.strftime("%m/%d") for d in pivot_nt.columns]
         pivot_ot.columns = [d.strftime("%m/%d") for d in pivot_ot.columns]
 
-        tab1, tab2 = st.tabs(["NT Hours", "OT Hours"])
-        with tab1:
+        tab_names = ["NT Hours", "OT Hours"]
+        if "dt" in pivot_data.columns:
+            pivot_dt = pivot_data.pivot_table(
+                index="mapped_trade", columns="date", values="dt", aggfunc="sum", fill_value=0
+            )
+            pivot_dt.columns = [d.strftime("%m/%d") for d in pivot_dt.columns]
+            tab_names.append("DT Hours")
+
+        tabs = st.tabs(tab_names)
+        with tabs[0]:
             pivot_nt["Total NT"] = pivot_nt.sum(axis=1)
             st.dataframe(pivot_nt.style.format("{:.1f}"), use_container_width=True)
-        with tab2:
+        with tabs[1]:
             pivot_ot["Total OT"] = pivot_ot.sum(axis=1)
             st.dataframe(pivot_ot.style.format("{:.1f}"), use_container_width=True)
+        if "dt" in pivot_data.columns:
+            with tabs[2]:
+                pivot_dt["Total DT"] = pivot_dt.sum(axis=1)
+                st.dataframe(pivot_dt.style.format("{:.1f}"), use_container_width=True)
     else:
         pivot_total = pivot_data.pivot_table(
             index="mapped_trade", columns="date", values="total", aggfunc="sum", fill_value=0
@@ -126,17 +144,23 @@ def render(cost_df: pd.DataFrame):
     # --- Daily Cost Chart ---
     st.subheader("Daily Cost")
 
-    daily_cost = filtered.groupby("date").agg(
+    cost_agg = dict(
         daily_cost=("total_cost", "sum"),
         daily_nt_cost=("nt_cost", "sum"),
         daily_ot_cost=("ot_cost", "sum"),
-    ).reset_index().sort_values("date")
+    )
+    if "dt_cost" in filtered.columns:
+        cost_agg["daily_dt_cost"] = ("dt_cost", "sum")
+    daily_cost = filtered.groupby("date").agg(**cost_agg).reset_index().sort_values("date")
 
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(x=daily_cost["date"], y=daily_cost["daily_nt_cost"],
                           name="NT Cost", marker_color=COLORS["nt"]))
     fig2.add_trace(go.Bar(x=daily_cost["date"], y=daily_cost["daily_ot_cost"],
                           name="OT Cost", marker_color=COLORS["ot"]))
+    if "daily_dt_cost" in daily_cost.columns:
+        fig2.add_trace(go.Bar(x=daily_cost["date"], y=daily_cost["daily_dt_cost"],
+                              name="DT Cost", marker_color=COLORS.get("dt", "#9C27B0")))
     fig2.update_layout(barmode="stack", height=350,
                        margin=dict(l=40, r=20, t=30, b=40),
                        xaxis_title="Date", yaxis_title="Cost ($)",

@@ -11,13 +11,21 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     st.caption("Expand levels: Week > Contractor > Trade > Person")
 
     # --- Weekly summary (top level) ---
-    weekly = cost_df.groupby(["iso_year", "iso_week", "week_start"]).agg(
+    wk_agg = dict(
         total=("total_hours", "sum"),
         nt=("nt_hours", "sum"),
         ot=("ot_hours", "sum"),
+    )
+    has_dt = "dt_hours" in cost_df.columns
+    if has_dt:
+        wk_agg["dt"] = ("dt_hours", "sum")
+    wk_agg.update(dict(
         cost=("total_cost", "sum"),
         headcount=("person_id", "nunique"),
         days=("date", "nunique"),
+    ))
+    weekly = cost_df.groupby(["iso_year", "iso_week", "week_start"]).agg(
+        **wk_agg
     ).reset_index().sort_values("week_start")
 
     weekly["label"] = weekly.apply(
@@ -26,23 +34,36 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     weekly["ot_pct"] = np.where(weekly["total"] > 0, weekly["ot"] / weekly["total"] * 100, 0)
 
     # Weekly summary table
-    wk_display = weekly[["label", "days", "headcount", "total", "nt", "ot", "ot_pct", "cost"]].copy()
-    wk_display.columns = ["Week", "Days", "People", "Total Hrs", "NT", "OT", "OT %", "Cost"]
+    wk_cols = ["label", "days", "headcount", "total", "nt", "ot"]
+    wk_col_names = ["Week", "Days", "People", "Total Hrs", "NT", "OT"]
+    if has_dt:
+        wk_cols.append("dt")
+        wk_col_names.append("DT")
+    wk_cols.extend(["ot_pct", "cost"])
+    wk_col_names.extend(["OT %", "Cost"])
+    wk_display = weekly[wk_cols].copy()
+    wk_display.columns = wk_col_names
 
     totals = wk_display.select_dtypes(include=[np.number]).sum()
-    tot_row = pd.DataFrame([{
+    tot_dict = {
         "Week": "TOTAL", "Days": int(totals["Days"]), "People": "",
         "Total Hrs": totals["Total Hrs"], "NT": totals["NT"], "OT": totals["OT"],
         "OT %": totals["OT"] / totals["Total Hrs"] * 100 if totals["Total Hrs"] > 0 else 0,
         "Cost": totals["Cost"],
-    }])
+    }
+    if has_dt:
+        tot_dict["DT"] = totals["DT"]
+    tot_row = pd.DataFrame([tot_dict])
     wk_display = pd.concat([wk_display, tot_row], ignore_index=True)
 
+    wk_fmt = {
+        "Total Hrs": "{:,.0f}", "NT": "{:,.0f}", "OT": "{:,.0f}",
+        "OT %": "{:.1f}%", "Cost": "${:,.0f}",
+    }
+    if has_dt:
+        wk_fmt["DT"] = "{:,.0f}"
     st.dataframe(
-        wk_display.style.format({
-            "Total Hrs": "{:,.0f}", "NT": "{:,.0f}", "OT": "{:,.0f}",
-            "OT %": "{:.1f}%", "Cost": "${:,.0f}",
-        }),
+        wk_display.style.format(wk_fmt),
         use_container_width=True, hide_index=True,
     )
 
@@ -66,9 +87,14 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     st.subheader(f"{wk_label}")
 
     # --- Contractor level ---
-    by_contractor = wk_data.groupby("contractor").agg(
+    c_agg = dict(
         total=("total_hours", "sum"), nt=("nt_hours", "sum"), ot=("ot_hours", "sum"),
-        cost=("total_cost", "sum"), headcount=("person_id", "nunique"),
+    )
+    if has_dt:
+        c_agg["dt"] = ("dt_hours", "sum")
+    c_agg.update(dict(cost=("total_cost", "sum"), headcount=("person_id", "nunique")))
+    by_contractor = wk_data.groupby("contractor").agg(
+        **c_agg
     ).reset_index().sort_values("total", ascending=False)
     by_contractor["ot_pct"] = np.where(
         by_contractor["total"] > 0, by_contractor["ot"] / by_contractor["total"] * 100, 0
@@ -84,11 +110,18 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
             f"${crow['cost']:,.0f}"
         ):
             # --- Trade level ---
-            by_trade = c_data.groupby("mapped_trade").agg(
+            t_agg = dict(
                 total=("total_hours", "sum"), nt=("nt_hours", "sum"), ot=("ot_hours", "sum"),
+            )
+            if has_dt:
+                t_agg["dt"] = ("dt_hours", "sum")
+            t_agg.update(dict(
                 cost=("total_cost", "sum"), headcount=("person_id", "nunique"),
                 has_rate=("has_rate", "first"),
                 zero_rate=("zero_rate", "first"),
+            ))
+            by_trade = c_data.groupby("mapped_trade").agg(
+                **t_agg
             ).reset_index().sort_values("total", ascending=False)
 
             for _, trow in by_trade.iterrows():
@@ -108,21 +141,33 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
                 )
 
                 # --- Person level ---
-                by_person = t_data.groupby("name").agg(
+                p_agg = dict(
                     days=("date", "nunique"),
                     total=("total_hours", "sum"),
                     nt=("nt_hours", "sum"),
                     ot=("ot_hours", "sum"),
-                    cost=("total_cost", "sum"),
+                )
+                if has_dt:
+                    p_agg["dt"] = ("dt_hours", "sum")
+                p_agg["cost"] = ("total_cost", "sum")
+                by_person = t_data.groupby("name").agg(
+                    **p_agg
                 ).reset_index().sort_values("total", ascending=False)
 
-                by_person.columns = ["Name", "Days", "Total", "NT", "OT", "Cost"]
+                p_col_names = ["Name", "Days", "Total", "NT", "OT"]
+                if has_dt:
+                    p_col_names.append("DT")
+                p_col_names.append("Cost")
+                by_person.columns = p_col_names
 
+                p_fmt = {
+                    "Total": "{:,.1f}", "NT": "{:,.1f}", "OT": "{:,.1f}",
+                    "Cost": "${:,.2f}",
+                }
+                if has_dt:
+                    p_fmt["DT"] = "{:,.1f}"
                 st.dataframe(
-                    by_person.style.format({
-                        "Total": "{:,.1f}", "NT": "{:,.1f}", "OT": "{:,.1f}",
-                        "Cost": "${:,.2f}",
-                    }),
+                    by_person.style.format(p_fmt),
                     use_container_width=True, hide_index=True,
                     height=min(400, 56 + 35 * len(by_person)),
                 )

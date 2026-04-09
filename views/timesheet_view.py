@@ -78,17 +78,26 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     total_hrs = filtered["total_hours"].sum()
     total_nt = filtered["nt_hours"].sum()
     total_ot = filtered["ot_hours"].sum()
+    has_dt = "dt_hours" in filtered.columns
+    total_dt = filtered["dt_hours"].sum() if has_dt else 0
     total_cost = filtered["total_cost"].sum()
     headcount = filtered["person_id"].nunique()
     days = filtered["date"].dt.date.nunique()
 
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    if has_dt:
+        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+    else:
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Headcount", f"{headcount}")
     m2.metric("Days", f"{days}")
     m3.metric("Total Hours", f"{total_hrs:,.1f}")
     m4.metric("NT Hours", f"{total_nt:,.1f}")
     m5.metric("OT Hours", f"{total_ot:,.1f}")
-    m6.metric("Total Cost", f"${total_cost:,.0f}")
+    if has_dt:
+        m6.metric("DT Hours", f"{total_dt:,.1f}")
+        m7.metric("Total Cost", f"${total_cost:,.0f}")
+    else:
+        m6.metric("Total Cost", f"${total_cost:,.0f}")
 
     st.divider()
 
@@ -133,14 +142,25 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     # --- NT / OT split per person ---
     st.subheader(f"{contractor} — NT / OT Split by Person")
 
-    ntot_summary = filtered.groupby(["name", "mapped_trade"]).agg(
+    ntot_agg = dict(
         total=("total_hours", "sum"),
         nt=("nt_hours", "sum"),
         ot=("ot_hours", "sum"),
+    )
+    if "dt_hours" in filtered.columns:
+        ntot_agg["dt"] = ("dt_hours", "sum")
+    ntot_agg.update(dict(
         nt_cost=("nt_cost", "sum"),
         ot_cost=("ot_cost", "sum"),
+    ))
+    if "dt_cost" in filtered.columns:
+        ntot_agg["dt_cost"] = ("dt_cost", "sum")
+    ntot_agg.update(dict(
         total_cost=("total_cost", "sum"),
         days=("date", "nunique"),
+    ))
+    ntot_summary = filtered.groupby(["name", "mapped_trade"]).agg(
+        **ntot_agg
     ).reset_index().sort_values("total", ascending=False)
 
     ntot_summary["ot_pct"] = np.where(
@@ -149,10 +169,14 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     )
 
     ntot_display = ntot_summary.copy()
-    ntot_display.columns = [
-        "Name", "Trade", "Total Hrs", "NT Hrs", "OT Hrs",
-        "NT Cost", "OT Cost", "Total Cost", "Days", "OT %",
-    ]
+    col_names = ["Name", "Trade", "Total Hrs", "NT Hrs", "OT Hrs"]
+    if "dt" in ntot_summary.columns:
+        col_names.append("DT Hrs")
+    col_names.extend(["NT Cost", "OT Cost"])
+    if "dt_cost" in ntot_summary.columns:
+        col_names.append("DT Cost")
+    col_names.extend(["Total Cost", "Days", "OT %"])
+    ntot_display.columns = col_names
 
     # Add totals
     num_totals = ntot_display.select_dtypes(include=[np.number]).sum()
@@ -164,17 +188,23 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
         total_row["OT %"] = num_totals["OT Hrs"] / num_totals["Total Hrs"] * 100
     ntot_display = pd.concat([ntot_display, total_row], ignore_index=True)
 
+    fmt = {
+        "Total Hrs": "{:,.1f}",
+        "NT Hrs": "{:,.1f}",
+        "OT Hrs": "{:,.1f}",
+        "NT Cost": "${:,.2f}",
+        "OT Cost": "${:,.2f}",
+        "Total Cost": "${:,.2f}",
+        "Days": "{:.0f}",
+        "OT %": "{:.1f}%",
+    }
+    if "DT Hrs" in ntot_display.columns:
+        fmt["DT Hrs"] = "{:,.1f}"
+    if "DT Cost" in ntot_display.columns:
+        fmt["DT Cost"] = "${:,.2f}"
+
     st.dataframe(
-        ntot_display.style.format({
-            "Total Hrs": "{:,.1f}",
-            "NT Hrs": "{:,.1f}",
-            "OT Hrs": "{:,.1f}",
-            "NT Cost": "${:,.2f}",
-            "OT Cost": "${:,.2f}",
-            "Total Cost": "${:,.2f}",
-            "Days": "{:.0f}",
-            "OT %": "{:.1f}%",
-        }).map(
+        ntot_display.style.format(fmt).map(
             lambda v: "font-weight: bold" if isinstance(v, str) and v == "TOTAL" else "",
             subset=["Name"],
         ),
@@ -213,52 +243,83 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     # --- Trade summary for the period ---
     st.subheader(f"{contractor} — Trade Summary")
 
-    trade_summary = filtered.groupby("mapped_trade").agg(
+    trade_agg = dict(
         headcount=("person_id", "nunique"),
         days=("date", "nunique"),
         total=("total_hours", "sum"),
         nt=("nt_hours", "sum"),
         ot=("ot_hours", "sum"),
+    )
+    if "dt_hours" in filtered.columns:
+        trade_agg["dt"] = ("dt_hours", "sum")
+    trade_agg.update(dict(
         nt_rate=("nt_rate", "first"),
         ot_rate=("ot_rate", "first"),
         nt_cost=("nt_cost", "sum"),
         ot_cost=("ot_cost", "sum"),
-        total_cost=("total_cost", "sum"),
+    ))
+    if "dt_cost" in filtered.columns:
+        trade_agg["dt_cost"] = ("dt_cost", "sum")
+    trade_agg["total_cost"] = ("total_cost", "sum")
+
+    trade_summary = filtered.groupby("mapped_trade").agg(
+        **trade_agg
     ).reset_index().sort_values("total_cost", ascending=False)
 
-    trade_summary.columns = [
-        "Trade", "People", "Days", "Total Hrs", "NT Hrs", "OT Hrs",
-        "NT Rate", "OT Rate", "NT Cost", "OT Cost", "Total Cost",
-    ]
+    ts_cols = ["Trade", "People", "Days", "Total Hrs", "NT Hrs", "OT Hrs"]
+    if "dt" in trade_summary.columns:
+        ts_cols.append("DT Hrs")
+    ts_cols.extend(["NT Rate", "OT Rate", "NT Cost", "OT Cost"])
+    if "dt_cost" in trade_summary.columns:
+        ts_cols.append("DT Cost")
+    ts_cols.append("Total Cost")
+    trade_summary.columns = ts_cols
+
+    ts_fmt = {
+        "Total Hrs": "{:,.1f}",
+        "NT Hrs": "{:,.1f}",
+        "OT Hrs": "{:,.1f}",
+        "NT Rate": "${:,.2f}",
+        "OT Rate": "${:,.2f}",
+        "NT Cost": "${:,.2f}",
+        "OT Cost": "${:,.2f}",
+        "Total Cost": "${:,.2f}",
+    }
+    if "DT Hrs" in trade_summary.columns:
+        ts_fmt["DT Hrs"] = "{:,.1f}"
+    if "DT Cost" in trade_summary.columns:
+        ts_fmt["DT Cost"] = "${:,.2f}"
 
     st.dataframe(
-        trade_summary.style.format({
-            "Total Hrs": "{:,.1f}",
-            "NT Hrs": "{:,.1f}",
-            "OT Hrs": "{:,.1f}",
-            "NT Rate": "${:,.2f}",
-            "OT Rate": "${:,.2f}",
-            "NT Cost": "${:,.2f}",
-            "OT Cost": "${:,.2f}",
-            "Total Cost": "${:,.2f}",
-        }),
+        trade_summary.style.format(ts_fmt),
         use_container_width=True, hide_index=True,
     )
 
     # --- Downloadable detail ---
     st.subheader("Export Detail")
 
-    export = filtered[[
+    export_cols = [
         "date", "name", "trade", "mapped_trade", "paid_hours",
-        "nt_hours", "ot_hours", "nt_rate", "ot_rate",
-        "nt_cost", "ot_cost", "total_cost",
-    ]].copy()
-    export["date"] = export["date"].dt.strftime("%Y-%m-%d")
-    export.columns = [
-        "Date", "Name", "Gate Trade", "Mapped Trade", "Paid Hours",
-        "NT Hours", "OT Hours", "NT Rate", "OT Rate",
-        "NT Cost", "OT Cost", "Total Cost",
+        "nt_hours", "ot_hours",
     ]
+    export_col_names = [
+        "Date", "Name", "Gate Trade", "Mapped Trade", "Paid Hours",
+        "NT Hours", "OT Hours",
+    ]
+    if "dt_hours" in filtered.columns:
+        export_cols.append("dt_hours")
+        export_col_names.append("DT Hours")
+    export_cols.extend(["nt_rate", "ot_rate", "nt_cost", "ot_cost"])
+    export_col_names.extend(["NT Rate", "OT Rate", "NT Cost", "OT Cost"])
+    if "dt_cost" in filtered.columns:
+        export_cols.append("dt_cost")
+        export_col_names.append("DT Cost")
+    export_cols.append("total_cost")
+    export_col_names.append("Total Cost")
+
+    export = filtered[export_cols].copy()
+    export["date"] = export["date"].dt.strftime("%Y-%m-%d")
+    export.columns = export_col_names
     export = export.sort_values(["Date", "Mapped Trade", "Name"])
 
     csv = export.to_csv(index=False)
