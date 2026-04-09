@@ -1,14 +1,17 @@
-"""Forecast view: interactive EAC with daily planning, manual overrides, and adjustable parameters."""
+"""Forecast view: simplified, persistent, no lag.
+
+Uses saved forecast as the baseline going forward.
+New saves become the active forecast until someone updates it.
+"""
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import json
 from datetime import datetime, timedelta
-from forecast import calculate_forecast, get_daily_burn_rate
 from forecast_store import save_forecast, load_forecast
-from components import metric_row, eac_chart, COLORS
-from config import PROJECT_END, PLANNED_DAILY_HOURS
+from estimate import estimate_to_date
+from components import metric_row, COLORS
+from config import DAILY_ESTIMATE_COSTS
 import plotly.graph_objects as go
 
 
@@ -16,255 +19,183 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
     st.header("Forecast")
 
     # =====================================================================
-    # AUTO-LOAD saved forecast on first run
+    # Load saved forecast (persistent baseline)
     # =====================================================================
     if "forecast_loaded" not in st.session_state:
         saved = load_forecast()
         if saved and "plans" in saved:
             for key, val in saved["plans"].items():
                 st.session_state[key] = val
-            st.session_state["forecast_loaded"] = True
             st.session_state["forecast_meta"] = {
                 "saved_by": saved.get("saved_by", ""),
                 "saved_at": saved.get("saved_at", ""),
                 "note": saved.get("note", ""),
             }
-        else:
-            st.session_state["forecast_loaded"] = True
+        st.session_state["forecast_loaded"] = True
 
-    # =====================================================================
-    # SAVE bar
-    # =====================================================================
     meta = st.session_state.get("forecast_meta", {})
     if meta.get("saved_by"):
         st.caption(
-            f"Last saved by **{meta['saved_by']}** on {meta['saved_at']}"
+            f"Active forecast by **{meta['saved_by']}** on {meta['saved_at']}"
             + (f" — _{meta['note']}_" if meta.get("note") else "")
         )
 
-    save_col1, save_col2, save_col3 = st.columns([1, 2, 1])
-    with save_col1:
-        save_name = st.text_input("Your name", key="fc_save_name", placeholder="e.g. Dany")
-    with save_col2:
-        save_note = st.text_input("Note (optional)", key="fc_save_note",
-                                   placeholder="e.g. Updated PMI demob plan")
-    with save_col3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Save Forecast", type="primary", use_container_width=True, key="fc_save_btn"):
-            all_plans = {k: v for k, v in st.session_state.items()
-                         if k.startswith("daily_plan_v2_")}
-            if not all_plans:
-                st.warning("No forecast data to save. Edit the planner below first.")
-            elif not save_name:
-                st.warning("Enter your name before saving.")
-            else:
-                success = save_forecast(
-                    plans=all_plans,
-                    saved_by=save_name,
-                    note=save_note,
-                    params={
-                        "hours_per_day": st.session_state.get("fc_hrs_per_day", 10),
-                        "nt_pct": st.session_state.get("fc_nt_pct", 75),
-                        "forecast_days": st.session_state.get("fc_days", 14),
-                    },
-                )
-                if success:
-                    st.success(f"Forecast saved by {save_name}")
-                    st.session_state["forecast_meta"] = {
-                        "saved_by": save_name,
-                        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "note": save_note,
-                    }
-
-    st.divider()
-
     # =====================================================================
-    # SECTION 1: Daily Forecast Planner
-    # =====================================================================
-    st.subheader("Daily Forecast Planner")
-    st.caption(
-        "Adjust headcount per trade per day starting from today. "
-        "Pre-filled with yesterday's actual headcount. Forecast window: 14 days."
-    )
-
     # Key dates
+    # =====================================================================
     last_actual = cost_df["date"].max().date()
-    forecast_start = last_actual + timedelta(days=1)  # day after last actual
+    forecast_start = last_actual + timedelta(days=1)
 
-    col_a, col_b, col_c, col_d = st.columns(4)
-    with col_a:
-        st.metric("Last Actual", last_actual.strftime("%b %d"))
-    with col_b:
-        st.metric("Forecast From", forecast_start.strftime("%b %d"))
-    with col_c:
-        forecast_days = st.number_input(
-            "Forecast days", min_value=7, max_value=60, value=14, key="fc_days"
-        )
-    with col_d:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Last Actual", last_actual.strftime("%b %d, %Y"))
+    with col2:
+        forecast_days = st.number_input("Forecast days", 7, 60, 14, key="fc_days")
+    with col3:
         forecast_end = forecast_start + timedelta(days=forecast_days - 1)
-        st.metric("Forecast To", forecast_end.strftime("%b %d"))
+        st.metric("Forecast To", forecast_end.strftime("%b %d, %Y"))
 
+    forecast_dates = pd.date_range(start=forecast_start, periods=forecast_days, freq="D")
+    date_labels = [d.strftime("%a %m/%d") for d in forecast_dates]
+
+    # =====================================================================
     # Contractor selector
-    fc_contractor = st.selectbox(
-        "Contractor", sorted(cost_df["contractor"].unique()), key="fc_plan_contractor"
-    )
+    # =====================================================================
+    contractors = sorted(cost_df["contractor"].unique())
+    fc_contractor = st.selectbox("Contractor", contractors, key="fc_contractor")
 
-    # Get trades and rates for this contractor
+    # Get trades and rates
     contractor_comp = comparison[comparison["contractor"] == fc_contractor].copy()
     trades = sorted(contractor_comp["mapped_trade"].unique())
 
+    # Include trades from rate table that may not have actuals
+    from data_loader import get_embedded_rate_table
+    rate_table = get_embedded_rate_table()
+    all_rate_trades = rate_table[rate_table["Contractor"] == fc_contractor]["Trade"].unique()
     trade_rates = {}
     for _, row in contractor_comp.iterrows():
         t = row["mapped_trade"]
         if row["actual_total_hours"] > 0:
-            blended = row["actual_total_cost"] / row["actual_total_hours"]
+            trade_rates[t] = round(row["actual_total_cost"] / row["actual_total_hours"], 2)
         elif row["est_hours"] > 0:
-            blended = row["est_cost"] / row["est_hours"]
-        else:
-            blended = 0
-        trade_rates[t] = round(blended, 2)
-
-    # Also include trades from planned daily hours that may not have actuals yet
-    # (e.g. crane equipment lines)
-    from data_loader import get_embedded_rate_table, build_rate_lookup
-    rate_table = get_embedded_rate_table()
-    all_rate_trades = rate_table[rate_table["Contractor"] == fc_contractor]["Trade"].unique()
+            trade_rates[t] = round(row["est_cost"] / row["est_hours"], 2)
     for t in all_rate_trades:
         if t not in trades:
             trades.append(t)
         if t not in trade_rates:
-            rate_row = rate_table[
-                (rate_table["Contractor"] == fc_contractor) & (rate_table["Trade"] == t)
-            ]
-            if len(rate_row) > 0:
-                trade_rates[t] = round(rate_row["Rate"].values[0], 2)
-    trades = sorted(trades)
+            r = rate_table[(rate_table["Contractor"] == fc_contractor) & (rate_table["Trade"] == t)]
+            if len(r) > 0:
+                trade_rates[t] = round(r["Rate"].values[0], 2)
+    trades = sorted(set(trades))
 
-    # Generate forecast dates
-    forecast_dates = pd.date_range(start=forecast_start, periods=forecast_days, freq="D")
-    date_labels = [d.strftime("%a %m/%d") for d in forecast_dates]
+    # =====================================================================
+    # Build forecast grid — pre-fill from estimate, use saved if exists
+    # =====================================================================
+    plan_key = f"fc_{fc_contractor}_{forecast_days}"
 
-    # Build planned baseline from estimate tabs
+    # Default from estimate planned hours
     from collections import defaultdict
-    planned_rows = PLANNED_DAILY_HOURS.get(fc_contractor, [])
-    planned_by_trade = defaultdict(list)
-    for pr in planned_rows:
-        base = pr["trade"]
-        for suffix in [" NT", " OT", " DT", " ST", " - Standard", " - Overtime",
-                       " NT (Pre/Post)", " / ST"]:
-            if base.endswith(suffix):
-                base = base[:-len(suffix)]
-                break
-        planned_by_trade[base].append(pr)
-
-    def _planned_hours(trade_name, dt_str):
-        """Get total planned hours for a trade on a date (sum across NT/OT/DT)."""
-        total = 0
-        for pr in planned_by_trade.get(trade_name, []):
-            total += pr["daily"].get(dt_str, 0) * pr["qty"]
-        return round(total, 1)
-
-    # Build or load the daily plan
-    plan_key = f"daily_plan_v2_{fc_contractor}_{forecast_days}"
+    planned_rows = DAILY_ESTIMATE_COSTS.get(fc_contractor, {}).get("daily", {})
 
     if plan_key not in st.session_state:
         plan_data = {}
         for trade in trades:
-            plan_data[trade] = [
-                _planned_hours(trade, fd.strftime("%Y-%m-%d"))
-                for fd in forecast_dates
-            ]
+            # Try to get per-trade hours from PLANNED_DAILY_HOURS
+            from config import PLANNED_DAILY_HOURS
+            planned_by_trade = defaultdict(list)
+            for pr in PLANNED_DAILY_HOURS.get(fc_contractor, []):
+                base = pr["trade"]
+                for suffix in [" NT", " OT", " DT", " ST", " - Standard", " - Overtime",
+                               " NT (Pre/Post)", " / ST"]:
+                    if base.endswith(suffix):
+                        base = base[:-len(suffix)]
+                        break
+                planned_by_trade[base].append(pr)
+
+            matching = planned_by_trade.get(trade, [])
+            daily_vals = []
+            for fd in forecast_dates:
+                dt_str = fd.strftime("%Y-%m-%d")
+                hrs = sum(pr["daily"].get(dt_str, 0) * pr["qty"] for pr in matching)
+                daily_vals.append(round(hrs, 1))
+            plan_data[trade] = daily_vals
         st.session_state[plan_key] = plan_data
 
+    # Ensure all trades present
     for trade in trades:
         if trade not in st.session_state[plan_key]:
-            st.session_state[plan_key][trade] = [
-                _planned_hours(trade, fd.strftime("%Y-%m-%d"))
-                for fd in forecast_dates
-            ]
+            st.session_state[plan_key][trade] = [0.0] * len(forecast_dates)
         elif len(st.session_state[plan_key][trade]) != len(forecast_dates):
-            st.session_state[plan_key][trade] = [
-                _planned_hours(trade, fd.strftime("%Y-%m-%d"))
-                for fd in forecast_dates
-            ]
+            st.session_state[plan_key][trade] = [0.0] * len(forecast_dates)
 
-    # Build DataFrame
-    plan_df = pd.DataFrame(
-        st.session_state[plan_key], index=date_labels,
-    ).T
+    # =====================================================================
+    # Editable grid
+    # =====================================================================
+    st.subheader(f"{fc_contractor} — Daily Hours Forecast")
+    st.caption("Values are total hours per trade per day. Edit to adjust.")
+
+    plan_df = pd.DataFrame(st.session_state[plan_key], index=date_labels).T
     plan_df.index.name = "Trade"
 
-    st.caption(
-        "Pre-filled with **planned hours from estimate**. "
-        "Edit any cell to adjust. Values are total hours per trade per day."
-    )
-
-    edited_plan = st.data_editor(plan_df, use_container_width=True)
+    edited = st.data_editor(plan_df, use_container_width=True)
 
     # Persist edits
-    if edited_plan is not None:
-        for trade in edited_plan.index:
-            vals = pd.to_numeric(edited_plan.loc[trade], errors="coerce").fillna(0)
+    if edited is not None:
+        for trade in edited.index:
+            vals = pd.to_numeric(edited.loc[trade], errors="coerce").fillna(0)
             st.session_state[plan_key][trade] = [float(v) for v in vals.values]
 
-    # Calculate forecast
-    if edited_plan is not None:
-        edited_plan = edited_plan.apply(pd.to_numeric, errors="coerce").fillna(0)
+    # =====================================================================
+    # Calculate results
+    # =====================================================================
+    if edited is not None:
+        edited = edited.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-        plan_summary = []
-        for trade in edited_plan.index:
-            forecast_hrs = float(edited_plan.loc[trade].sum())
+        rows = []
+        for trade in edited.index:
+            fc_hrs = float(edited.loc[trade].sum())
             rate = trade_rates.get(trade, 0)
-            fc_cost = forecast_hrs * rate
+            fc_cost = fc_hrs * rate
 
             comp_row = contractor_comp[contractor_comp["mapped_trade"] == trade]
             act_hrs = comp_row["actual_total_hours"].sum() if len(comp_row) > 0 else 0
             act_cost = comp_row["actual_total_cost"].sum() if len(comp_row) > 0 else 0
+
+            # Date-based estimate for this trade
             est_hrs = comp_row["est_hours"].sum() if len(comp_row) > 0 else 0
             est_cost = comp_row["est_cost"].sum() if len(comp_row) > 0 else 0
 
-            plan_summary.append({
-                "Trade": trade,
-                "Forecast Hrs": forecast_hrs,
-                "Blended Rate": rate,
-                "Forecast Cost": fc_cost,
-                "Actual Hrs": act_hrs,
-                "Actual Cost": act_cost,
-                "EAC Hrs": act_hrs + forecast_hrs,
-                "EAC Cost": act_cost + fc_cost,
-                "Est Hrs": est_hrs,
-                "Est Cost": est_cost,
-                "Var Hrs": est_hrs - (act_hrs + forecast_hrs),
+            rows.append({
+                "Trade": trade, "Rate": rate,
+                "Actual Hrs": act_hrs, "Actual Cost": act_cost,
+                "FC Hrs": fc_hrs, "FC Cost": fc_cost,
+                "EAC Hrs": act_hrs + fc_hrs, "EAC Cost": act_cost + fc_cost,
+                "Est Hrs": est_hrs, "Est Cost": est_cost,
+                "Var Hrs": est_hrs - (act_hrs + fc_hrs),
                 "Var Cost": est_cost - (act_cost + fc_cost),
             })
 
-        plan_result = pd.DataFrame(plan_summary)
+        result = pd.DataFrame(rows)
+        tot = result.select_dtypes(include=[np.number]).sum()
 
-        st.markdown(f"**{fc_contractor} — Forecast from Daily Plan**")
-
-        tot = plan_result.select_dtypes(include=[np.number]).sum()
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Forecast Hours", f"{tot['Forecast Hrs']:,.0f}")
-        m2.metric("Forecast Cost", f"${tot['Forecast Cost']:,.0f}")
-        m3.metric("EAC Cost", f"${tot['EAC Cost']:,.0f}")
-        var = tot["Est Cost"] - tot["EAC Cost"]
-        m4.metric("Variance to Est", f"${var:+,.0f}",
-                  delta="Under" if var >= 0 else "OVER",
-                  delta_color="normal" if var >= 0 else "inverse")
+        # KPIs
+        metric_row([
+            {"label": "Actual Cost", "value": tot["Actual Cost"], "prefix": "$"},
+            {"label": "Forecast Cost", "value": tot["FC Cost"], "prefix": "$"},
+            {"label": "EAC Cost", "value": tot["EAC Cost"], "prefix": "$"},
+            {"label": "Variance", "value": tot["Est Cost"] - tot["EAC Cost"], "prefix": "$",
+             "delta": "Under" if tot["Est Cost"] >= tot["EAC Cost"] else "OVER",
+             "delta_color": "normal" if tot["Est Cost"] >= tot["EAC Cost"] else "inverse"},
+        ])
 
         st.dataframe(
-            plan_result.style.format({
-                "Forecast Hrs": "{:,.0f}",
-                "Blended Rate": "${:,.2f}",
-                "Forecast Cost": "${:,.0f}",
-                "Actual Hrs": "{:,.0f}",
-                "Actual Cost": "${:,.0f}",
-                "EAC Hrs": "{:,.0f}",
-                "EAC Cost": "${:,.0f}",
-                "Est Hrs": "{:,.0f}",
-                "Est Cost": "${:,.0f}",
-                "Var Hrs": "{:+,.0f}",
-                "Var Cost": "${:+,.0f}",
+            result.style.format({
+                "Rate": "${:,.2f}",
+                "Actual Hrs": "{:,.0f}", "Actual Cost": "${:,.0f}",
+                "FC Hrs": "{:,.0f}", "FC Cost": "${:,.0f}",
+                "EAC Hrs": "{:,.0f}", "EAC Cost": "${:,.0f}",
+                "Est Hrs": "{:,.0f}", "Est Cost": "${:,.0f}",
+                "Var Hrs": "{:+,.0f}", "Var Cost": "${:+,.0f}",
             }).map(
                 lambda v: "color: #C5221F; font-weight: bold" if isinstance(v, (int, float)) and v < 0 else "",
                 subset=["Var Hrs", "Var Cost"],
@@ -273,182 +204,35 @@ def render(cost_df: pd.DataFrame, comparison: pd.DataFrame):
         )
 
     # =====================================================================
-    # SECTION 2: Overall Forecast (all contractors)
+    # SAVE
     # =====================================================================
     st.divider()
-    st.subheader("Overall Forecast")
+    sc1, sc2, sc3 = st.columns([1, 2, 1])
+    with sc1:
+        save_name = st.text_input("Your name", key="fc_save_name")
+    with sc2:
+        save_note = st.text_input("Note", key="fc_save_note")
+    with sc3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Save Forecast", type="primary", use_container_width=True, key="fc_save"):
+            if not save_name:
+                st.warning("Enter your name.")
+            else:
+                # Collect all contractor forecast plans
+                all_plans = {k: v for k, v in st.session_state.items()
+                             if k.startswith("fc_") and isinstance(v, dict)}
+                # Also include equipment data
+                for k in ["equip_actuals", "equip_forecast", "equip_rates"]:
+                    if k in st.session_state:
+                        all_plans[k] = st.session_state[k]
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        method = st.selectbox(
-            "Forecast Method",
-            ["current_performance", "manual", "hybrid"],
-            format_func=lambda x: {
-                "current_performance": "Current Performance",
-                "manual": "Manual Remaining",
-                "hybrid": "Hybrid (Performance + Manual Overrides)",
-            }[x],
-            key="fc_method",
-        )
-    with col2:
-        productivity = st.slider(
-            "Productivity Factor",
-            min_value=0.5, max_value=2.0, value=1.0, step=0.05,
-            help="< 1.0 = worse than plan, > 1.0 = better than plan",
-            key="fc_productivity",
-        )
-    with col3:
-        burn_rate = st.slider(
-            "Burn Rate Factor",
-            min_value=0.5, max_value=2.0, value=1.0, step=0.05,
-            help="Multiplier on remaining hours",
-            key="fc_burn_rate",
-        )
-
-    # Manual overrides
-    if method in ("manual", "hybrid"):
-        st.markdown("**Manual Overrides** — edit Remaining Hours or Cost below:")
-
-        override_data = comparison[["contractor", "mapped_trade", "est_hours",
-                                     "actual_total_hours", "est_cost",
-                                     "actual_total_cost"]].copy()
-        override_data["remaining_hours"] = (
-            override_data["est_hours"] - override_data["actual_total_hours"]
-        ).clip(lower=0)
-        override_data["remaining_cost"] = (
-            override_data["est_cost"] - override_data["actual_total_cost"]
-        ).clip(lower=0)
-        override_data = override_data[
-            (override_data["actual_total_hours"] > 0) | (override_data["est_hours"] > 0)
-        ].copy()
-
-        edit_df = override_data[["contractor", "mapped_trade", "est_hours",
-                                  "actual_total_hours", "remaining_hours",
-                                  "remaining_cost"]].copy()
-        edit_df.columns = ["Contractor", "Trade", "Est Hours", "Actual Hours",
-                           "Remaining Hours", "Remaining Cost"]
-
-        edited = st.data_editor(
-            edit_df,
-            disabled=["Contractor", "Trade", "Est Hours", "Actual Hours"],
-            num_rows="fixed", use_container_width=True, key="fc_overrides",
-        )
-
-        manual_overrides = {}
-        if edited is not None:
-            for _, row in edited.iterrows():
-                orig = override_data[
-                    (override_data["contractor"] == row["Contractor"])
-                    & (override_data["mapped_trade"] == row["Trade"])
-                ]
-                if len(orig) > 0:
-                    if (row["Remaining Hours"] != orig["remaining_hours"].values[0] or
-                            row["Remaining Cost"] != orig["remaining_cost"].values[0]):
-                        manual_overrides[(row["Contractor"], row["Trade"])] = {
-                            "remaining_hours": row["Remaining Hours"],
-                            "remaining_cost": row["Remaining Cost"],
-                        }
-    else:
-        manual_overrides = {}
-
-    # Run forecast
-    forecast_df = calculate_forecast(
-        comparison=comparison, cost_df=cost_df,
-        method=method, productivity_factor=productivity,
-        burn_rate_factor=burn_rate, manual_overrides=manual_overrides,
-    )
-    st.session_state["forecast_df"] = forecast_df
-
-    # KPIs
-    total_eac_cost = forecast_df["eac_cost"].sum()
-    total_est_cost = forecast_df["est_cost"].sum()
-    total_actual = forecast_df["actual_total_cost"].sum()
-    forecast_var = total_est_cost - total_eac_cost
-    total_eac_hrs = forecast_df["eac_hours"].sum()
-    total_forecast_ot = forecast_df["forecast_ot_hours"].sum()
-    forecast_ot_pct = (total_forecast_ot / total_eac_hrs * 100
-                       if total_eac_hrs > 0 else 0)
-
-    metric_row([
-        {"label": "Estimate", "value": total_est_cost, "prefix": "$"},
-        {"label": "Actual to Date", "value": total_actual, "prefix": "$"},
-        {"label": "EAC (Cost)", "value": total_eac_cost, "prefix": "$"},
-        {"label": "Forecast Variance", "value": forecast_var, "prefix": "$",
-         "delta": "Under" if forecast_var >= 0 else "OVER",
-         "delta_color": "normal" if forecast_var >= 0 else "inverse"},
-        {"label": "Forecast OT %", "value": forecast_ot_pct, "prefix": "%"},
-    ])
-
-    # Charts
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**EAC by Contractor**")
-        st.plotly_chart(eac_chart(forecast_df, "contractor"), use_container_width=True)
-    with col2:
-        st.markdown("**EAC by Trade**")
-        st.plotly_chart(eac_chart(forecast_df, "mapped_trade"), use_container_width=True)
-
-    # Detail table
-    st.markdown("**Forecast Detail**")
-    fc_display = forecast_df[[
-        "contractor", "mapped_trade",
-        "est_hours", "actual_total_hours", "eac_hours", "forecast_hours_variance",
-        "est_cost", "actual_total_cost", "eac_cost", "forecast_cost_variance",
-        "pct_hours_complete", "current_ot_ratio",
-    ]].copy()
-    fc_display.columns = [
-        "Contractor", "Trade", "Est Hours", "Actual Hours", "EAC Hours", "Hours Var",
-        "Est Cost", "Actual Cost", "EAC Cost", "Cost Var", "% Complete", "OT Ratio",
-    ]
-    fc_display = fc_display.sort_values("EAC Cost", ascending=False)
-
-    st.dataframe(
-        fc_display.style.format({
-            "Est Hours": "{:,.0f}", "Actual Hours": "{:,.0f}",
-            "EAC Hours": "{:,.0f}", "Hours Var": "{:+,.0f}",
-            "Est Cost": "${:,.0f}", "Actual Cost": "${:,.0f}",
-            "EAC Cost": "${:,.0f}", "Cost Var": "${:+,.0f}",
-            "% Complete": "{:.0f}%", "OT Ratio": "{:.1%}",
-        }).map(
-            lambda v: "color: #C5221F; font-weight: bold" if isinstance(v, (int, float)) and v < 0 else "",
-            subset=["Hours Var", "Cost Var"],
-        ),
-        use_container_width=True, hide_index=True,
-    )
-
-    # Burn rate & S-curve
-    st.markdown("**Burn Rate Trend**")
-    col1, _ = st.columns([1, 3])
-    with col1:
-        trailing = st.number_input("Trailing days", min_value=3, max_value=30,
-                                   value=7, key="fc_trailing")
-    daily = get_daily_burn_rate(cost_df, trailing_days=trailing)
-
-    fig3 = go.Figure()
-    fig3.add_trace(go.Bar(x=daily["date"], y=daily["daily_cost"], name="Daily Cost",
-                          marker_color=COLORS["primary"], opacity=0.3))
-    fig3.add_trace(go.Scatter(x=daily["date"], y=daily["rolling_avg_cost"],
-                              name=f"{trailing}-day Avg", mode="lines",
-                              line=dict(color=COLORS["danger"], width=2)))
-    fig3.update_layout(height=350, margin=dict(l=40, r=20, t=30, b=40),
-                       xaxis_title="Date", yaxis_title="Daily Cost ($)",
-                       legend=dict(orientation="h", y=-0.15), plot_bgcolor="white")
-    fig3.update_xaxes(gridcolor="#E8EAED")
-    fig3.update_yaxes(gridcolor="#E8EAED")
-    st.plotly_chart(fig3, use_container_width=True)
-
-    st.markdown("**S-Curve: Cumulative Actual vs Estimate**")
-    fig4 = go.Figure()
-    fig4.add_trace(go.Scatter(x=daily["date"], y=daily["cum_cost"],
-                              mode="lines", name="Actual",
-                              line=dict(color=COLORS["actual"], width=3)))
-    fig4.add_hline(y=total_est_cost, line_dash="dash", line_color=COLORS["estimate"],
-                   annotation_text=f"Estimate: ${total_est_cost:,.0f}")
-    fig4.add_hline(y=total_eac_cost, line_dash="dot", line_color=COLORS["forecast"],
-                   annotation_text=f"EAC: ${total_eac_cost:,.0f}")
-    fig4.update_layout(height=400, margin=dict(l=40, r=20, t=30, b=40),
-                       xaxis_title="Date", yaxis_title="Cumulative Cost ($)",
-                       legend=dict(orientation="h", y=-0.15), plot_bgcolor="white")
-    fig4.update_xaxes(gridcolor="#E8EAED")
-    fig4.update_yaxes(gridcolor="#E8EAED")
-    st.plotly_chart(fig4, use_container_width=True)
+                success = save_forecast(
+                    plans=all_plans, saved_by=save_name, note=save_note,
+                )
+                if success:
+                    st.session_state["forecast_meta"] = {
+                        "saved_by": save_name,
+                        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "note": save_note,
+                    }
+                    st.success(f"Forecast saved. This is now the active baseline.")
